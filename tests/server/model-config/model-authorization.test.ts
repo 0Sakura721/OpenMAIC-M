@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   generate: vi.fn(async function* () {}),
   pi: vi.fn(async () => {}),
   invalidOwner: false,
+  workspaceId: null as string | null,
 }));
 vi.mock('@/lib/ai/providers', async (original) => ({
   ...(await original<typeof import('@/lib/ai/providers')>()),
@@ -40,6 +41,11 @@ vi.mock('@/lib/server/ssrf-guard', async (original) => ({
   ...(await original<typeof import('@/lib/server/ssrf-guard')>()),
   validateClientBaseUrl: async () => null,
   validateUrlForSSRF: async () => null,
+}));
+vi.mock('@/lib/server/model-config/runtime', async (original) => ({
+  ...(await original<typeof import('@/lib/server/model-config/runtime')>()),
+  // Identity/database boundary only; slot lookup and model resolution stay real.
+  requestWorkspaceId: async () => mocks.workspaceId,
 }));
 
 const runtime = await import('@/lib/server/model-config/runtime');
@@ -243,4 +249,168 @@ describe('operator model authorization', () => {
       expect(mocks.callLLM).not.toHaveBeenCalled();
     },
   );
+});
+
+describe('Pi classroom tool requirement through real model resolution', () => {
+  const noTools = 'qwen/qwen3.5-flash';
+  const atlas = { preset: 'atlascloud', apiKey: 'test-key' };
+
+  beforeEach(() => {
+    mocks.workspaceId = 'test-owner';
+    runtime.setWorkspaceLayerLoaderForTests(async () => null);
+  });
+  afterEach(() => {
+    mocks.workspaceId = null;
+    runtime.setWorkspaceLayerLoaderForTests();
+  });
+
+  it.each(['classroom', 'llm'] as const)(
+    'refuses a tools:false model assigned to %s before building a model or starting SSE',
+    async (slot) => {
+      deployment({
+        providers: { ac: atlas, good: { preset: 'openai', apiKey: 'test-key' } },
+        slots: { [slot]: { model: `ac:${noTools}`, fallback: 'good:gpt-5.6' } },
+      });
+      const response = await pi(request(chatBody('openai:gpt-5.6')));
+      expect(response.status).toBe(400);
+      expect(response.headers.get('Content-Type')).not.toContain('text/event-stream');
+      expect(await response.json()).toMatchObject({
+        errorCode: 'MODEL_CONFIG_INVALID',
+        reason: 'tool_calling_required',
+        error: expect.stringContaining('classroom slot'),
+      });
+      expect(mocks.getModel).not.toHaveBeenCalled();
+      expect(mocks.pi).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['openai', 'gpt-5.6'],
+    ['openai', 'not-in-the-catalogue'],
+    ['openai-compatible', 'deepseek-r1'],
+  ])('allows %s:%s without probing tool support', async (preset, model) => {
+    deployment({
+      providers: { p: { preset, apiKey: 'test-key', baseUrl: 'https://example.com/v1' } },
+      slots: { classroom: `p:${model}` },
+    });
+    const response = await pi(request(chatBody('ollama:deepseek-r1')));
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(mocks.pi).toHaveBeenCalledOnce();
+    expect(mocks.getModel).toHaveBeenCalledWith(expect.objectContaining({ modelId: model }));
+  });
+
+  it.each([false, true])('checks a request model or stage override (routed=%s)', async (routed) => {
+    deployment({}, true);
+    const response = await pi(
+      request(
+        {
+          ...chatBody(routed ? 'custom:unknown' : 'ollama:deepseek-r1'),
+          requireToolCalling: false,
+        },
+        routed ? { 'chat-adapter': { model: 'ollama:deepseek-r1' } } : undefined,
+      ),
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ reason: 'tool_calling_required' });
+    expect(mocks.pi).not.toHaveBeenCalled();
+  });
+
+  it('checks a request model selected over a legacy default, without attaching a fallback', async () => {
+    deployment(config, true);
+    const response = await pi(request(chatBody('ollama:deepseek-r1')));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ reason: 'tool_calling_required' });
+    expect(mocks.pi).not.toHaveBeenCalled();
+    const { attachedModelFallback } = await import('@/lib/ai/model-fallbacks');
+    expect(attachedModelFallback(mocks.getModel.mock.results[0].value.model)).toBeUndefined();
+  });
+
+  it.each(['custom:unknown-model', 'openai-compatible:gpt-5.6'])(
+    'keeps unknown or custom request models passing (%s)',
+    async (model) => {
+      deployment({}, true);
+      const response = await pi(
+        request({
+          ...chatBody(model),
+          apiKey: 'own-key',
+          providerType: 'openai',
+          baseUrl: 'https://example.com/v1',
+        }),
+      );
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(mocks.pi).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([false, true])(
+    'keeps YAML configuration authoritative (allowUserKeys=%s)',
+    async (allowed) => {
+      deployment({ ...config, allowUserKeys: allowed });
+      const response = await pi(request(chatBody('ollama:deepseek-r1')));
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(mocks.getModel).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'primary' }));
+    },
+  );
+
+  it('checks the workspace choice and keeps a locked choice authoritative', async () => {
+    const base: ModelConfigFile = {
+      providers: { ac: atlas, openai: config.providers!.openai },
+      slots: { llm: `ac:${noTools}` },
+    };
+    runtime.setWorkspaceLayerLoaderForTests(async () => ({
+      source: 'workspace',
+      config: { slots: { classroom: 'openai:allowed' } },
+    }));
+    deployment(base);
+    const workspaceResponse = await pi(request(chatBody('ollama:deepseek-r1')));
+    expect(workspaceResponse.status).toBe(200);
+    await workspaceResponse.text();
+    mocks.getModel.mockClear();
+    mocks.pi.mockClear();
+    deployment({ ...base, lock: ['llm'] });
+    const lockedResponse = await pi(request(chatBody('openai:allowed')));
+    expect(lockedResponse.status).toBe(400);
+    expect(await lockedResponse.json()).toMatchObject({
+      error: expect.stringContaining('administrator'),
+    });
+    expect(mocks.getModel).not.toHaveBeenCalled();
+    expect(mocks.pi).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unauthorized model before the tool requirement', async () => {
+    deployment({
+      providers: { ac: { ...atlas, models: ['allowed'] } },
+      slots: { classroom: 'ac:allowed' },
+    });
+    runtime.setWorkspaceLayerLoaderForTests(async () => ({
+      source: 'workspace',
+      config: { slots: { classroom: `ac:${noTools}` } },
+    }));
+    const response = await pi(request(chatBody('openai:allowed')));
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ errorCode: 'PROVIDER_DISABLED' });
+    expect(mocks.getModel).not.toHaveBeenCalled();
+    expect(mocks.pi).not.toHaveBeenCalled();
+  });
+
+  it('keeps the legacy chat route and quiz/PBL stage resolution available without tools', async () => {
+    deployment({ providers: { ac: atlas }, slots: { classroom: `ac:${noTools}` } });
+    const response = await chat(request(chatBody('openai:allowed')));
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(mocks.generate).toHaveBeenCalledOnce();
+    for (const stage of [
+      'quiz-grade',
+      'pbl-v2-runtime',
+      'pbl-v2-runtime:instructor',
+      'pbl-v2-runtime:open-task',
+      'pbl-v2-runtime:evaluate',
+      'pbl-v2-runtime:simulator',
+    ] as const) {
+      await expect(resolveModel({ stage })).resolves.toMatchObject({ modelId: noTools });
+    }
+  });
 });

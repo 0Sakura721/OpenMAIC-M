@@ -248,10 +248,10 @@ function resolveTarget(
 }
 
 /** Requirement status from the built-in chat model catalogue. */
-function checkRequirement(
+export function checkRequirement(
   requirement: SlotRequirement,
   capability: SlotCapability,
-  target: ResolvedModelTarget,
+  target: Pick<ResolvedModelTarget, 'registryId' | 'modelId' | 'catalogue'>,
 ): RequirementCheck {
   if (requirement !== 'toolCalling' || capability !== 'chat' || target.catalogue === false) {
     return { requirement, status: 'unknown' };

@@ -64,6 +64,8 @@ export interface ModelRequest {
    * defaults an older deployment set with DEFAULT_MODEL.
    */
   stage?: LlmStage;
+  /** Server call-site requirement; Pi chat needs tools, other classroom uses do not. */
+  requireToolCalling?: boolean;
   /** Whose web settings apply; null for none. */
   workspaceId?: string | null;
   /**
@@ -101,6 +103,7 @@ export async function resolveModel(params: ModelRequest): Promise<ResolvedModel>
     return resolveStageModel({
       stage: params.stage,
       workspaceId: params.workspaceId ?? null,
+      requireToolCalling: params.requireToolCalling,
       ...(allowed ? { legacyRequest: () => resolveRequestedModel(params) } : {}),
     });
   }

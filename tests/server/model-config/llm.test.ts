@@ -167,6 +167,32 @@ describe('resolveStageModel', () => {
     expect(await attachedModelFallback(resolved.model)!()).toBeNull();
   });
 
+  it.each([
+    ['atlascloud', 'qwen/qwen3.5-flash', false],
+    ['openai', 'gpt-5.6', true],
+    ['openai-compatible', 'unknown-model', true],
+  ])('applies Pi tool requirements to the existing %s fallback', async (preset, model, allowed) => {
+    const { attachedModelFallback } = await import('@/lib/ai/model-fallbacks');
+    state.lookup = lookupFromLayers('classroom', {
+      deployment: layer('deployment', {
+        providers: {
+          primary: { preset: 'openai', apiKey: 'test-key' },
+          backup: { preset, apiKey: 'test-key', baseUrl: 'https://example.com/v1' },
+        },
+        slots: { classroom: { model: 'primary:gpt-5.6', fallback: `backup:${model}` } },
+      }),
+      workspace: null,
+    });
+    const resolved = await resolveStageModel({
+      stage: 'chat-adapter',
+      workspaceId: null,
+      requireToolCalling: true,
+    });
+    const fallback = await attachedModelFallback(resolved.model)!();
+    if (allowed) expect(fallback).toMatchObject({ modelString: `openai:${model}` });
+    else expect(fallback).toBeNull();
+  });
+
   it('refuses a model the catalogue says cannot meet the slot, before any fallback', async () => {
     state.lookup = lookupFromLayers('agent', {
       deployment: null,
