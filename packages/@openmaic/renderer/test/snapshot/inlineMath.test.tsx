@@ -26,6 +26,19 @@ vi.mock('html-to-image', () => ({
     return new Blob();
   },
 }));
+// Real typesetting is covered by the element tests. Here it only has to mark
+// each formula as typeset: the cap needs over 1,000 formulas on the slide, and
+// rendering them all through KaTeX in jsdom takes seconds on a loaded runner.
+vi.mock('katex', () => ({
+  default: {
+    render: (latex: string, host: Element) => {
+      const formula = host.ownerDocument.createElement('span');
+      formula.className = 'katex';
+      formula.textContent = latex;
+      host.replaceChildren(formula);
+    },
+  },
+}));
 vi.mock('html2canvas-pro', () => ({
   default: async (target: Element) => {
     captured.counts.push(rootCounts(target));
@@ -34,8 +47,10 @@ vi.mock('html2canvas-pro', () => ({
 }));
 
 import { measureSlideElementGeometry, slideToPng } from '../../src/snapshot';
+import { INLINE_MATH_MAX_ROOT_FORMULAS } from '../../src/utils/inlineMath';
 
-const PER_ROOT = 600;
+/** Two roots of this many formulas are together just over the per-root cap. */
+const PER_ROOT = INLINE_MATH_MAX_ROOT_FORMULAS / 2 + 1;
 
 function textBox(id: string, prefix: string, top: number): PPTTextElement {
   const formulas = Array.from(
@@ -60,7 +75,7 @@ const slide: Slide = {
   id: 'slide-math',
   viewportSize: 1000,
   viewportRatio: 0.5625,
-  // Together over the per-root formula cap, each well under it.
+  // Together over the per-root formula cap, each under it.
   elements: [textBox('a', 'a', 0), textBox('b', 'b', 250)],
   theme: {
     fontName: 'Arial',
@@ -78,7 +93,12 @@ beforeEach(() => {
   vi.stubGlobal('cancelIdleCallback', () => undefined);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Snapshots unmount and remove their off-screen tree one tick after they
+  // settle. Let that happen while the idle stubs are still in place, so no
+  // tree outlives its test.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(document.body.children).toHaveLength(0);
   captured.counts = [];
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -102,7 +122,10 @@ describe('snapshots typeset inline math per prose root', () => {
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
       this: HTMLElement,
     ) {
-      counts ??= rootCounts(document.body);
+      // Count within the tree being measured: the off-screen container this
+      // element belongs to, a direct child of the body.
+      const tree = [...document.body.children].find((child) => child.contains(this));
+      counts ??= rootCounts(tree ?? this);
       return new DOMRect();
     });
     await measureSlideElementGeometry(slide, ['a', 'b'], { timeoutMs: 50 });
