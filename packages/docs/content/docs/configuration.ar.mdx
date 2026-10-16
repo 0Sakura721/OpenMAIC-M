@@ -456,7 +456,7 @@ NEXT_PUBLIC_ENABLE_VIDEO_EXPORT=true
 NEXT_PUBLIC_ENABLE_PPTX_IMPORT=true
 ```
 
-تعتمد محادثة Pi على دعم النموذج لاستدعاء الأدوات/الدوال. إذا كان النموذج أو الموفر المحدد لا يدعم استدعاء الأدوات، فاضبط `NEXT_PUBLIC_PI_CHAT_ENABLED=false` (أو `0`) وأعد البناء لاستخدام مسار المحادثة القديم.
+تعتمد محادثة Pi على دعم النموذج لاستدعاء الأدوات/الدوال. يُرفض النموذج الذي يذكر الكتالوج المدمج أنه لا يدعم استدعاء الأدوات قبل الاستدلال، مع `400 MODEL_CONFIG_INVALID` (`reason: tool_calling_required`)، ويشير **إعداد نماذج المقرر** إلى هذا الشرط عند خانة الصف. إذا كان النموذج أو الموفر المحدد لا يدعم استدعاء الأدوات، فاضبط `NEXT_PUBLIC_PI_CHAT_ENABLED=false` (أو `0`) وأعد البناء لاستخدام مسار المحادثة القديم.
 
 في Docker Compose، يُحمَّل ملف `.env.local` عبر `env_file` وقت التشغيل، ولا يُستخدم لاستبدال متغيرات وسائط البناء. أعد البناء مع تحديد القيمة صراحةً كما في الأمر التالي؛ فتغيير بيئة التشغيل وحدها لا يغيّر مسار المحادثة الذي اختير عند بناء العميل والخادم.
 
@@ -619,6 +619,28 @@ slots:
 
 `IMAGE_OPENAI_`، `IMAGE_SEEDREAM_`، `IMAGE_QWEN_IMAGE_`، `IMAGE_NANO_BANANA_`، `IMAGE_MINIMAX_`، `IMAGE_GROK_`، `IMAGE_GLM_` و `IMAGE_LEMONADE_`.
 
+يولّد GLM Image (Zhipu CogView) الصور بنماذج CogView (`cogview-3-flash` و`cogview-4`):
+
+```yaml title="openmaic.yml"
+providers:
+  glm-image-service:
+    preset: glm-image
+    apiKey: ${IMAGE_GLM_API_KEY}
+    # اختياري:
+    baseUrl: https://open.bigmodel.cn/api/paas/v4
+
+slots:
+  image: glm-image-service:cogview-3-flash
+```
+
+أو اضبطه عبر متغيرات البيئة:
+
+```bash
+IMAGE_GLM_API_KEY=
+# اختياري:
+IMAGE_GLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+```
+
 Lemonade خدمة محلية ولا تحتاج إلى مفتاح API:
 
 ```bash
@@ -746,13 +768,13 @@ web-search:
 
 تتجاوز متغيرات البيئة حقول YAML المطابقة حقلًا بحقل. يجب أن تستخدم المفاتيح معرفات الموفرين المسجلين في الكود مثل `openai`، `doubao-tts`، `openai-whisper`، `mineru`، `alidocmind`، `seedream`، `seedance`، `exa`، `tavily` أو `searxng`. لا يمكن تسجيل معرفات غير معروفة هنا كموفري LLM مخصصين.
 
-## Model authorization for server-managed providers
+## تفويض النماذج لدى المزودين المدارين من الخادم
 
-For providers that use deployment credentials to send a selected model upstream, set an explicit `models` list in `openmaic.yml` (`providers.<id>.models`), or the corresponding `*_MODELS` environment variable / `server-providers.yml` section's `models` list. This applies to chat, image, video, text to speech, speech recognition and model-based web search. Model ids match exactly, including case, after surrounding whitespace is removed at configuration load. Deterministic adapter aliases use the declared model id for authorization. Requests for unlisted models return HTTP 403 with `PROVIDER_DISABLED` and the message “This model is not authorized for server-managed credentials”.
+للمزودين الذين يرسلون النموذج المختار إلى الخدمة الأصلية باستخدام بيانات اعتماد النشر، اضبط قائمة `models` صريحة في `openmaic.yml` (`providers.<id>.models`)، أو متغير البيئة `*_MODELS` المقابل / قائمة `models` في قسم `server-providers.yml`. ينطبق ذلك على المحادثة والصور والفيديو وتحويل النص إلى كلام والتعرف على الكلام والبحث على الويب المعتمد على النماذج. تُطابَق معرّفات النماذج مطابقة تامة، مع مراعاة حالة الأحرف، بعد إزالة المسافات المحيطة عند تحميل الإعدادات. تُفوَّض الأسماء المستعارة الحتمية للمحوّلات بمعرّف النموذج المُعلَن. تُعيد طلبات النماذج غير المدرجة HTTP 403 مع `PROVIDER_DISABLED` والرسالة «This model is not authorized for server-managed credentials».
 
-**Breaking change:** without an explicit list, only deployment default/fallback models and the primary/fallback models referenced by slots for that capability are usable. `DEFAULT_MODEL` and `MODEL_FALLBACK` grant chat models on legacy deployments. A provider-only media slot grants its single adapter default model; it does not grant the preset's catalogue. Workspace assignments cannot expand the deployment's authorized set. Voice registration and synthesis must also authorize any model selected for voice compatibility.
+**تغيير كاسر:** من دون قائمة صريحة، لا يمكن استخدام إلا النماذج الافتراضية والاحتياطية للنشر، والنماذج الأساسية والاحتياطية التي تشير إليها خانات تلك القدرة. في الإعدادات القديمة، يفوّض `DEFAULT_MODEL` و`MODEL_FALLBACK` نماذج المحادثة. خانة الوسائط التي تذكر المزود فقط تفوّض النموذج الافتراضي الوحيد للمحوّل، ولا تفوّض كتالوج الإعداد المسبق كله. لا يمكن لتعيينات مساحة العمل توسيع المجموعة المفوَّضة في النشر. ويجب أن يفوّض تسجيل الأصوات وتوليفها أيضًا أي نموذج يُختار لتوافق الصوت.
 
-To migrate, list every model users should be able to select, restart the server, and update any workspace selections that are no longer authorized. Startup logs name the setting to add for each provider that has credentials but no list. Users' own provider credentials and keyless local providers such as Ollama and Lemonade are unaffected. A provider configured without credentials is not restricted, so do not point one at a gateway that adds its own upstream credential (for example an internal OpenAI-compatible proxy): give that gateway a key and configure it as a credentialed provider with a `models` list, or restrict models in the gateway itself. Document parsers and search services without model selection (such as Tavily) need no model list.
+للانتقال، اذكر كل نموذج ينبغي أن يتمكن المستخدمون من اختياره، وأعد تشغيل الخادم، وحدّث اختيارات مساحات العمل التي لم تعد مفوَّضة. تذكر سجلات التشغيل الإعداد الواجب إضافته لكل مزود لديه بيانات اعتماد بلا قائمة. لا تتأثر بيانات اعتماد المستخدمين الخاصة بمزوديهم، ولا المزودون المحليون الذين لا يحتاجون إلى مفتاح مثل Ollama وLemonade. المزود المضبوط دون بيانات اعتماد غير مقيَّد، فلا توجّهه إلى بوابة تضيف بيانات اعتماد خاصة بها نحو الخدمة الأصلية (مثل وكيل داخلي متوافق مع OpenAI): أعطِ تلك البوابة مفتاحًا واضبطها مزودًا ببيانات اعتماد وقائمة `models`، أو قيّد النماذج في البوابة نفسها. لا تحتاج محللات المستندات وخدمات البحث التي لا تختار نموذجًا (مثل Tavily) إلى قائمة نماذج.
 
 ```yaml
 providers:
@@ -764,4 +786,4 @@ slots:
   llm: openai:gpt-5.4-mini
 ```
 
-Legacy equivalent: `OPENAI_API_KEY=...` and `OPENAI_MODELS=gpt-5.4-mini`. For media, use the capability prefix, for example `IMAGE_SEEDREAM_MODELS`, `VIDEO_SEEDANCE_MODELS`, `TTS_OPENAI_MODELS`, `ASR_OPENAI_MODELS` and `WEB_SEARCH_CLAUDE_MODELS`.
+المكافئ في الإعدادات القديمة: `OPENAI_API_KEY=...` و`OPENAI_MODELS=gpt-5.4-mini`. للوسائط استخدم بادئة القدرة، مثل `IMAGE_SEEDREAM_MODELS` و`VIDEO_SEEDANCE_MODELS` و`TTS_OPENAI_MODELS` و`ASR_OPENAI_MODELS` و`WEB_SEARCH_CLAUDE_MODELS`.

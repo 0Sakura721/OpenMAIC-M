@@ -456,7 +456,7 @@ NEXT_PUBLIC_ENABLE_VIDEO_EXPORT=true
 NEXT_PUBLIC_ENABLE_PPTX_IMPORT=true
 ```
 
-Pi 对话运行时依赖模型的工具／函数调用能力。如果所选模型或 provider 不支持工具调用，请设置 `NEXT_PUBLIC_PI_CHAT_ENABLED=false`（或 `0`）并重新构建，以使用旧版对话链路。
+Pi 对话运行时依赖模型的工具／函数调用能力。内置模型目录标明不支持工具调用的模型会在推理前被拒绝，返回 `400 MODEL_CONFIG_INVALID`（`reason: tool_calling_required`），**课程模型配置**也会在课堂互动槽位上注明这一要求。如果所选模型或 provider 不支持工具调用，请设置 `NEXT_PUBLIC_PI_CHAT_ENABLED=false`（或 `0`）并重新构建，以使用旧版对话链路。
 
 使用 Docker Compose 时，`.env.local` 由 `env_file` 在运行时加载，不参与构建参数插值。请按下面的命令显式传入构建时配置并重新构建；只修改运行时环境不会改变已构建的客户端和服务端对话路径。
 
@@ -768,13 +768,13 @@ web-search:
 
 环境变量会逐字段覆盖 YAML 中的同名 provider 配置。键名必须使用代码中已注册的 provider ID，例如 `openai`、`doubao-tts`、`openai-whisper`、`mineru`、`alidocmind`、`seedream`、`seedance`、`exa`、`tavily` 或 `searxng`；未知 ID 不能在这里注册为自定义 LLM provider。
 
-## Model authorization for server-managed providers
+## 服务端托管服务商的模型授权
 
-For providers that use deployment credentials to send a selected model upstream, set an explicit `models` list in `openmaic.yml` (`providers.<id>.models`), or the corresponding `*_MODELS` environment variable / `server-providers.yml` section's `models` list. This applies to chat, image, video, text to speech, speech recognition and model-based web search. Model ids match exactly, including case, after surrounding whitespace is removed at configuration load. Deterministic adapter aliases use the declared model id for authorization. Requests for unlisted models return HTTP 403 with `PROVIDER_DISABLED` and the message “This model is not authorized for server-managed credentials”.
+对于使用部署凭据把所选模型发往上游的服务商，请在 `openmaic.yml` 中设置显式的 `models` 列表（`providers.<id>.models`），或设置对应的 `*_MODELS` 环境变量 / `server-providers.yml` 中该部分的 `models` 列表。这适用于对话、图像、视频、语音合成、语音识别和基于模型的联网搜索。模型 ID 在加载配置时去掉首尾空白后精确匹配，区分大小写。确定性的适配器别名按声明的模型 ID 授权。请求未列出的模型会返回 HTTP 403，错误码 `PROVIDER_DISABLED`，消息为“This model is not authorized for server-managed credentials”。
 
-**Breaking change:** without an explicit list, only deployment default/fallback models and the primary/fallback models referenced by slots for that capability are usable. `DEFAULT_MODEL` and `MODEL_FALLBACK` grant chat models on legacy deployments. A provider-only media slot grants its single adapter default model; it does not grant the preset's catalogue. Workspace assignments cannot expand the deployment's authorized set. Voice registration and synthesis must also authorize any model selected for voice compatibility.
+**破坏性变更：** 没有显式列表时，只能使用部署的默认/回退模型，以及该能力的槽位所引用的主模型/回退模型。在旧版配置下，`DEFAULT_MODEL` 和 `MODEL_FALLBACK` 授权对话模型。只写服务商的媒体槽位只授权该适配器的默认模型，不授权该预设的整个模型目录。工作区的分配无法扩大部署的授权范围。音色注册和合成也必须授权为音色兼容性而选择的模型。
 
-To migrate, list every model users should be able to select, restart the server, and update any workspace selections that are no longer authorized. Startup logs name the setting to add for each provider that has credentials but no list. Users' own provider credentials and keyless local providers such as Ollama and Lemonade are unaffected. A provider configured without credentials is not restricted, so do not point one at a gateway that adds its own upstream credential (for example an internal OpenAI-compatible proxy): give that gateway a key and configure it as a credentialed provider with a `models` list, or restrict models in the gateway itself. Document parsers and search services without model selection (such as Tavily) need no model list.
+迁移时，列出用户应能选择的每个模型，重启服务，并更新不再获授权的工作区选择。对于有凭据但没有列表的服务商，启动日志会指出需要添加的设置。用户自己的服务商凭据，以及 Ollama、Lemonade 这类无需 key 的本地服务商不受影响。未配置凭据的服务商不受限制，因此不要把它指向会自行添加上游凭据的网关（例如内部的 OpenAI 兼容代理）：请给该网关一个 key，把它配置为带 `models` 列表的有凭据服务商，或在网关本身限制模型。没有模型选择的文档解析器和搜索服务（如 Tavily）不需要模型列表。
 
 ```yaml
 providers:
@@ -786,4 +786,4 @@ slots:
   llm: openai:gpt-5.4-mini
 ```
 
-Legacy equivalent: `OPENAI_API_KEY=...` and `OPENAI_MODELS=gpt-5.4-mini`. For media, use the capability prefix, for example `IMAGE_SEEDREAM_MODELS`, `VIDEO_SEEDANCE_MODELS`, `TTS_OPENAI_MODELS`, `ASR_OPENAI_MODELS` and `WEB_SEARCH_CLAUDE_MODELS`.
+旧版等价写法：`OPENAI_API_KEY=...` 和 `OPENAI_MODELS=gpt-5.4-mini`。媒体能力使用能力前缀，例如 `IMAGE_SEEDREAM_MODELS`、`VIDEO_SEEDANCE_MODELS`、`TTS_OPENAI_MODELS`、`ASR_OPENAI_MODELS` 和 `WEB_SEARCH_CLAUDE_MODELS`。

@@ -456,7 +456,7 @@ NEXT_PUBLIC_ENABLE_VIDEO_EXPORT=true
 NEXT_PUBLIC_ENABLE_PPTX_IMPORT=true
 ```
 
-Pi runtime требует поддержки вызова инструментов/функций моделью. Если выбранная модель или провайдер не поддерживает вызов инструментов, установите `NEXT_PUBLIC_PI_CHAT_ENABLED=false` (или `0`) и пересоберите приложение, чтобы использовать прежний путь чата.
+Pi runtime требует поддержки вызова инструментов/функций моделью. Модель, которая во встроенном каталоге отмечена как не поддерживающая вызов инструментов, отклоняется до инференса с `400 MODEL_CONFIG_INVALID` (`reason: tool_calling_required`), а **Настройка моделей курса** указывает это требование у слота класса. Если выбранная модель или провайдер не поддерживает вызов инструментов, установите `NEXT_PUBLIC_PI_CHAT_ENABLED=false` (или `0`) и пересоберите приложение, чтобы использовать прежний путь чата.
 
 В Docker Compose файл `.env.local` загружается через `env_file` во время выполнения и не используется для подстановки аргументов сборки. Пересоберите приложение с явным значением переменной, как показано ниже. Изменение только окружения запущенного контейнера не меняет путь чата, выбранный при сборке клиента и сервера.
 
@@ -619,6 +619,28 @@ slots:
 
 `IMAGE_OPENAI_`, `IMAGE_SEEDREAM_`, `IMAGE_QWEN_IMAGE_`, `IMAGE_NANO_BANANA_`, `IMAGE_MINIMAX_`, `IMAGE_GROK_`, `IMAGE_GLM_` и `IMAGE_LEMONADE_`.
 
+GLM Image (Zhipu CogView) генерирует изображения моделями CogView (`cogview-3-flash`, `cogview-4`):
+
+```yaml title="openmaic.yml"
+providers:
+  glm-image-service:
+    preset: glm-image
+    apiKey: ${IMAGE_GLM_API_KEY}
+    # Необязательно:
+    baseUrl: https://open.bigmodel.cn/api/paas/v4
+
+slots:
+  image: glm-image-service:cogview-3-flash
+```
+
+Или через переменные окружения:
+
+```bash
+IMAGE_GLM_API_KEY=
+# Необязательно:
+IMAGE_GLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+```
+
 Lemonade — локальный сервис, не требует ключа:
 
 ```bash
@@ -746,13 +768,13 @@ web-search:
 
 Переменные окружения по отдельным полям переопределяют соответствующие настройки в YAML. Ключи должны совпадать с зарегистрированными в коде ID провайдеров, например `openai`, `doubao-tts`, `openai-whisper`, `mineru`, `alidocmind`, `seedream`, `seedance`, `exa`, `tavily` или `searxng`. Неизвестные ID нельзя использовать для регистрации кастомных LLM провайдеров.
 
-## Model authorization for server-managed providers
+## Авторизация моделей для провайдеров с серверными ключами
 
-For providers that use deployment credentials to send a selected model upstream, set an explicit `models` list in `openmaic.yml` (`providers.<id>.models`), or the corresponding `*_MODELS` environment variable / `server-providers.yml` section's `models` list. This applies to chat, image, video, text to speech, speech recognition and model-based web search. Model ids match exactly, including case, after surrounding whitespace is removed at configuration load. Deterministic adapter aliases use the declared model id for authorization. Requests for unlisted models return HTTP 403 with `PROVIDER_DISABLED` and the message “This model is not authorized for server-managed credentials”.
+Для провайдеров, которые отправляют выбранную модель вверх по цепочке с учётными данными развертывания, задайте явный список `models` в `openmaic.yml` (`providers.<id>.models`) или соответствующую переменную окружения `*_MODELS` / список `models` в разделе `server-providers.yml`. Это относится к чату, изображениям, видео, синтезу речи, распознаванию речи и веб-поиску на основе моделей. Идентификаторы моделей сравниваются точно, с учётом регистра, после удаления окружающих пробелов при загрузке конфигурации. Детерминированные псевдонимы адаптеров авторизуются по объявленному идентификатору модели. Запросы к моделям вне списка возвращают HTTP 403 с `PROVIDER_DISABLED` и сообщением «This model is not authorized for server-managed credentials».
 
-**Breaking change:** without an explicit list, only deployment default/fallback models and the primary/fallback models referenced by slots for that capability are usable. `DEFAULT_MODEL` and `MODEL_FALLBACK` grant chat models on legacy deployments. A provider-only media slot grants its single adapter default model; it does not grant the preset's catalogue. Workspace assignments cannot expand the deployment's authorized set. Voice registration and synthesis must also authorize any model selected for voice compatibility.
+**Несовместимое изменение:** без явного списка доступны только модели развертывания по умолчанию и резервные модели, а также основные и резервные модели, на которые ссылаются слоты этой возможности. В устаревшей конфигурации `DEFAULT_MODEL` и `MODEL_FALLBACK` разрешают модели чата. Медиаслот, указывающий только провайдера, разрешает одну модель адаптера по умолчанию, а не весь каталог пресета. Назначения в рабочем пространстве не расширяют набор, разрешённый развертыванием. Регистрация и синтез голосов также должны разрешать модель, выбранную для совместимости голоса.
 
-To migrate, list every model users should be able to select, restart the server, and update any workspace selections that are no longer authorized. Startup logs name the setting to add for each provider that has credentials but no list. Users' own provider credentials and keyless local providers such as Ollama and Lemonade are unaffected. A provider configured without credentials is not restricted, so do not point one at a gateway that adds its own upstream credential (for example an internal OpenAI-compatible proxy): give that gateway a key and configure it as a credentialed provider with a `models` list, or restrict models in the gateway itself. Document parsers and search services without model selection (such as Tavily) need no model list.
+Для миграции перечислите все модели, которые пользователи должны иметь возможность выбрать, перезапустите сервер и обновите выборы в рабочих пространствах, которые больше не разрешены. Для каждого провайдера с учётными данными, но без списка, журнал запуска называет параметр, который нужно добавить. Собственные учётные данные пользователей и локальные провайдеры без ключа, такие как Ollama и Lemonade, не затрагиваются. Провайдер без учётных данных не ограничивается, поэтому не направляйте его на шлюз, который сам добавляет учётные данные вышестоящего сервиса (например, внутренний OpenAI-совместимый прокси): выдайте шлюзу ключ и настройте его как провайдер с учётными данными и списком `models` или ограничьте модели в самом шлюзе. Парсерам документов и сервисам поиска без выбора модели (например, Tavily) список моделей не нужен.
 
 ```yaml
 providers:
@@ -764,4 +786,4 @@ slots:
   llm: openai:gpt-5.4-mini
 ```
 
-Legacy equivalent: `OPENAI_API_KEY=...` and `OPENAI_MODELS=gpt-5.4-mini`. For media, use the capability prefix, for example `IMAGE_SEEDREAM_MODELS`, `VIDEO_SEEDANCE_MODELS`, `TTS_OPENAI_MODELS`, `ASR_OPENAI_MODELS` and `WEB_SEARCH_CLAUDE_MODELS`.
+Эквивалент в устаревшей конфигурации: `OPENAI_API_KEY=...` и `OPENAI_MODELS=gpt-5.4-mini`. Для медиа используйте префикс возможности, например `IMAGE_SEEDREAM_MODELS`, `VIDEO_SEEDANCE_MODELS`, `TTS_OPENAI_MODELS`, `ASR_OPENAI_MODELS` и `WEB_SEARCH_CLAUDE_MODELS`.

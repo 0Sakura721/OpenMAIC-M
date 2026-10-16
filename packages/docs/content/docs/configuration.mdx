@@ -456,7 +456,7 @@ NEXT_PUBLIC_ENABLE_VIDEO_EXPORT=true
 NEXT_PUBLIC_ENABLE_PPTX_IMPORT=true
 ```
 
-Pi chat requires model tool/function calling. If the selected model or provider does not support tool calls, set `NEXT_PUBLIC_PI_CHAT_ENABLED=false` (or `0`) and rebuild to use the legacy chat path.
+Pi chat requires model tool/function calling. It refuses a model that the built-in catalogue lists without tool calling before inference, with `400 MODEL_CONFIG_INVALID` (`reason: tool_calling_required`), and **Course Model Config** notes the requirement on the classroom slot. If the selected model or provider does not support tool calls, set `NEXT_PUBLIC_PI_CHAT_ENABLED=false` (or `0`) and rebuild to use the legacy chat path.
 
 With Docker Compose, `.env.local` is loaded by `env_file` at runtime, not used for build-arg interpolation. Rebuild with an explicit build-time override as below; a runtime-only change leaves the built client and server on their original chat path.
 
