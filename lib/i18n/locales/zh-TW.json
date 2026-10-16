@@ -1335,7 +1335,8 @@
       "brave": "Brave Search",
       "baidu": "Baidu",
       "claude": "Claude",
-      "searxng": "SearXNG"
+      "searxng": "SearXNG",
+      "builtin": "內建讀取服務"
     },
     "modelCount": "個模型",
     "modelSingular": "個模型",
@@ -1932,7 +1933,8 @@
         "providers": "設定語言模型服務的憑證、API 位址與模型目錄",
         "tts": "設定語音合成服務、音色與模型",
         "video": "設定影片生成服務的憑證與模型目錄",
-        "webSearch": "設定網路搜尋服務與檢索來源"
+        "webSearch": "設定網路搜尋服務與檢索來源",
+        "webFetch": "設定網頁內容擷取服務"
       },
       "nav": "模型服務",
       "notConfigured": "未設定",
@@ -2043,7 +2045,7 @@
       },
       "picker": {
         "follow": "跟隨{{name}}",
-        "providers": "Provider",
+        "providers": "供應商",
         "providerDefault": "預設模型",
         "modelId": "模型 ID",
         "use": "使用",
@@ -2134,6 +2136,10 @@
         "document": {
           "name": "文件解析",
           "desc": "讀取上傳的文件。"
+        },
+        "webFetch": {
+          "name": "網頁擷取",
+          "desc": "供智慧體讀取工作階段中已獲准的網頁。"
         }
       },
       "source": {
@@ -2147,6 +2153,7 @@
         "lines": {
           "rewrite": "改寫",
           "search": "搜尋",
+          "fetch": "擷取",
           "image": "圖像",
           "video": "影片"
         }
@@ -2179,7 +2186,11 @@
         "unconfirmed": "伺服器未確認已匯入。"
       }
     },
-    "serverConfiguredAddOwn": "如需使用自己的憑證，請新增一個供應商。"
+    "serverConfiguredAddOwn": "如需使用自己的憑證，請新增一個供應商。",
+    "webFetchSettings": "網頁擷取",
+    "webFetchHint": "選擇網頁讀取方式。託管服務只會收到工作階段中已獲准的公開網址。結果仍是不可信資料，失敗時不會切換讀取服務。",
+    "webFetchApiKey": "API 金鑰",
+    "webFetchSharedKeyHint": "此金鑰也用於與同一供應商進行對話。修改或移除金鑰也會影響對話。"
   },
   "workspace": {
     "untitledCourse": "未命名课堂",

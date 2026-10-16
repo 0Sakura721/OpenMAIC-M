@@ -127,6 +127,7 @@ Amazon Bedrock（`preset: bedrock`）はサーバーの AWS 認証情報チェ�
 | `asr` | asr | — | 音声認識（音声入力、音声・動画の文字起こし） |
 | `image` | image | — | 画像生成 |
 | `video` | video | — | 動画生成 |
+| `webFetch` | webFetch | — | Webページ抽出（既定：`builtin`） |
 | `webSearch` | webSearch | — | Web 検索 |
 | `document` | document | — | ドキュメント解析サービス（MinerU、MinerU Cloud、AliDocMind）。組み込みの PDF テキスト抽出にはサービスは不要です |
 
@@ -171,7 +172,7 @@ slots:
 
 ### フォールバック
 
-フォールバックは言語モデルのスロット、つまり `llm` とその下のすべてのスロットにだけ適用されます。`tts`、`asr`、`image`、`video`、`webSearch`、`document` のスロットに書いた `fallback` は拒否されます（`openmaic.yml` では起動時、モデル設定では保存時）。
+フォールバックは言語モデルのスロット、つまり `llm` とその下のすべてのスロットにだけ適用されます。`tts`、`asr`、`image`、`video`、`webSearch`、`webFetch`、`document` のスロットに書いた `fallback` は拒否されます（`openmaic.yml` では起動時、モデル設定では保存時）。
 
 主モデルの呼び出しが自身の再試行の後も再試行可能な失敗で終わった場合、スロットの `fallback` で一度だけ再試行します。再試行可能な失敗とは、SDK が一時的と判断したエラー、タイムアウト、ネットワークエラー、レート制限（429）、容量不足（503）、または空の出力です。プロバイダーがクォータ切れを明示的に返した場合（`insufficient_quota` などの OpenAI 互換のクォータコード。HTTP ステータスは問いません）は、主モデルで再試行せず、すぐにフォールバックに切り替えます。コンテンツ安全性による拒否やその他の 4xx エラーではフォールバックしません。フォールバックは通常の呼び出しとストリーミング呼び出しの両方に適用され、スロットの `thinking` パラメーターを使います。
 
@@ -192,7 +193,7 @@ lock: [llm, video]   # これらのスロットとその下のすべてのスロ
 
 - `lock` に挙げるスロットはすべて `slots` に書かれている必要があります（`null` も含みます。`video: null` と `lock: [video]` で全員の動画が無効のままになります）。未知のスロットや、`slots` に書かれていないロック対象のスロットがあると、位置（`lock.1: ...`）を示してサーバーは起動しません。
 - ロックしたスロットは子も固定します。`lock: [llm]` では、どのユーザーも `course.outline` などの言語モデルスロットを設定できず、すべて `openmaic.yml` だけで解決されます。
-- `lock: all` は書かれているかどうかにかかわらずすべてのスロットを固定します。`slots` に書かれていない機能のルートは、全員に対して未設定になります。
+- `lock: all` は書かれているかどうかにかかわらずすべてのスロットを固定します。`slots` に書かれていない機能のルートは、全員に対して未設定になります。ただし未指定の `webFetch` は `builtin` を使用し、`webFetch: null` で無効にできます。
 - `null`、サーバーの既定値、ロックは組み合わせて使えます。`video: null` だけなら既定で無効でユーザーが有効にでき、`lock: [video]` を加えると無効のままです。
 
 設定画面は、構成に応じて次の三つの形のいずれかになります。
@@ -406,7 +407,7 @@ slots:
     api: openai-completions
 ```
 
-`openmaic.yml` が存在すると、プロバイダー変数だけでは何も設定されません。変数だけで設定していた TTS、画像、ドキュメント、Web 検索のプロバイダー（`TTS_MINIMAX_API_KEY`、`IMAGE_SEEDREAM_API_KEY`、`PDF_MINERU_BASE_URL`、`TAVILY_API_KEY` など）は使われなくなり、どの機能にもデフォルトのプロバイダーは割り当てられません。使用するプロバイダーをすべて `providers` に宣言し、上の環境変数の例と同様に `slots` で `tts`、`image`、`document`、`webSearch`（および `asr`、`video`）を割り当ててください。割り当てられていないスロットは、ワークスペースがモデル設定で割り当てない限り未設定のままです。
+`openmaic.yml` が存在すると、プロバイダー変数だけでは何も設定されません。変数だけで設定していた TTS、画像、ドキュメント、Web 検索のプロバイダー（`TTS_MINIMAX_API_KEY`、`IMAGE_SEEDREAM_API_KEY`、`PDF_MINERU_BASE_URL`、`TAVILY_API_KEY` など）は使われなくなり、`webFetch` 以外の機能にはデフォルトのプロバイダーは割り当てられません。使用するプロバイダーをすべて `providers` に宣言し、上の環境変数の例と同様に `slots` で `tts`、`image`、`document`、`webSearch`（および `asr`、`video`）を割り当ててください。割り当てられていないその他のスロットは、ワークスペースがモデル設定で割り当てない限り未設定のままです。
 
 その後 `MODEL_ROUTES`、`DEFAULT_MODEL`、`MODEL_FALLBACK` を削除します。
 
@@ -810,3 +811,28 @@ Coding Plan のキーには `preset: kimi-coding-plan` と `llm: kimi:kimi-for-c
 エンドポイントはベースパスに応じて選択されます。末尾のスラッシュを除いたパスが `/coding/v1` で終わる場合は `/search`、それ以外は `/tools/search_pro` を使用します。デプロイで設定するカスタムプロキシも、このパス構成を維持する必要があります。ウィザードが検索を推奨するのは公式アカウントのベース URL のみなので、ワークスペースのカスタムチャットプロキシに検索が自動で割り当てられることはありません。
 
 `openmaic.yml` が存在する場合は、`providers.<id>: { preset: kimi }` を宣言して `slots.webSearch: <id>` を割り当ててください。旧環境変数 `WEB_SEARCH_KIMI_ENABLED` ではこのスロットを割り当てられません。
+
+## Webページ取得のプロバイダースロット
+
+`webFetch` は、エージェントの `fetch_url` ツールで使う読み取りサービスを選択します。従来の設定、空の設定、YAML 設定では `builtin` が既定であり、`lock: all` でこのルートが未指定の場合も同様です。`webFetch: null` を明示すると取得が無効になり、以降の実行からツールとそのプロンプトが除かれます。各リクエストは一つのプロバイダーだけを使用し、フォールバックや別サービスへの切り替えはありません。無効なプロバイダー参照やポリシーで拒否されるワークスペースのエンドポイントは、`webSearch` と同様に、エージェント開始前の機能解決時に実行全体を失敗させます。これは設定エラーであり、`fetch_url` の失敗結果ではありません。組み込みサービスへの切り替えも行いません。
+
+| プロバイダー | 認証情報 | 抽出 |
+| --- | --- | --- |
+| `builtin` | 不要 | ローカルの Readability/Turndown。PDF は `document` スロットを使用 |
+| `kimi` | 既存の Kimi プロバイダーのキーとベース URL | ホスト型の Markdown 抽出。PDF の URL にも対応 |
+
+```yaml
+providers:
+  reader:
+    preset: kimi
+    apiKey: ${KIMI_API_KEY}
+    baseUrl: https://api.moonshot.cn/v1
+slots:
+  webFetch: reader
+```
+
+`kimi` と `kimi-coding-plan` の両プリセットが `webFetch` を提供します。Coding Plan の認証情報には `preset: kimi-coding-plan` を使います。既定のベース URL は `https://api.kimi.com/coding/v1` で、明示したベース URL は保持されます。Moonshot Open Platform のベース URL（`https://api.moonshot.cn/v1`、`https://api.moonshot.ai/v1`）には `/tools/fetch`、Coding Plan には `/fetch` を使用します。いずれも Bearer 認証で `{ "url": ... }` を含む `POST` を送ります。アダプターは `markdown` または `content` を受け付けます。メンテナーが実際のキーで `POST https://api.kimi.com/coding/v1/fetch` をテストし、応答に `{ markdown, title, url }` が含まれることを確認しました。国際エンドポイントの利用可否は引き続き未検証です。リクエストはプロバイダーの `proxy` 設定と標準のプロキシ環境変数に従います。
+
+**設定 → モデルサービス → Webページ取得** で既存の認証情報を使用し、**コースモデル設定 → Webページ取得** でサービスを選びます。キーは同じプロバイダーのチャットと共有され、変更や削除はチャットにも影響します。管理者が固定したカードは読み取り専用です。初回設定では、別のサービスを明示的に選ぶまで組み込みの既定値を維持します。ワークスペースの認証情報は公式 API のベース URL を使用でき、独自の取得エンドポイントとプロキシは管理者が `openmaic.yml` に記述する必要があります。
+
+ホスト型サービスに URL を送る前に、セッションの URL 許可、厳密な URL 正規化、ローカル DNS の全アドレス検査を行います。返された最終 URL も、内容を受け入れる前に同じ検査を受けます。ホスト型サービス自身の DNS と中間リダイレクトはサービス側が制御するため、ローカルの検査ではそのネットワーク接続を固定できません。返されたテキストは信頼できないデータのままであり、認証チャレンジページの検出、バイト数制限、切り詰め表示、既存の Web 素材保存と `{trusted, untrusted}` の結果形式を適用します。

@@ -1350,7 +1350,8 @@
       "brave": "Brave Search",
       "baidu": "Baidu",
       "claude": "Claude",
-      "searxng": "SearXNG"
+      "searxng": "SearXNG",
+      "builtin": "Integrierter Leser"
     },
     "modelCount": "Modelle",
     "modelSingular": "Modell",
@@ -1947,7 +1948,8 @@
         "providers": "Zugangsdaten, Endpunkte und Modellkataloge für Sprachmodell-Dienste konfigurieren",
         "tts": "Sprachsynthese-Dienste, Stimmen und Modelle konfigurieren",
         "video": "Zugangsdaten und Modellkataloge für Videogenerierungs-Dienste konfigurieren",
-        "webSearch": "Websuch-Dienste und Abrufquellen konfigurieren"
+        "webSearch": "Websuch-Dienste und Abrufquellen konfigurieren",
+        "webFetch": "Dienste zur Extraktion von Webseiten konfigurieren"
       },
       "nav": "Modelldienste",
       "notConfigured": "Nicht konfiguriert",
@@ -2149,6 +2151,10 @@
         "document": {
           "name": "Dokumentanalyse",
           "desc": "Liest hochgeladene Dokumente."
+        },
+        "webFetch": {
+          "name": "Webseiten abrufen",
+          "desc": "Lässt den Agent in der Sitzung zugelassene Webseiten lesen."
         }
       },
       "source": {
@@ -2162,6 +2168,7 @@
         "lines": {
           "rewrite": "Anfrage",
           "search": "Suche",
+          "fetch": "Abruf",
           "image": "Bild",
           "video": "Video"
         }
@@ -2194,7 +2201,11 @@
         "unconfirmed": "Der Server hat den Import nicht bestätigt."
       }
     },
-    "serverConfiguredAddOwn": "Um eigene Zugangsdaten zu verwenden, füge einen separaten Anbieter hinzu."
+    "serverConfiguredAddOwn": "Um eigene Zugangsdaten zu verwenden, füge einen separaten Anbieter hinzu.",
+    "webFetchSettings": "Webseiten abrufen",
+    "webFetchHint": "Wählen Sie, wie Webseiten gelesen werden. Gehostete Dienste erhalten nur öffentliche URLs, die in der Sitzung zugelassen sind. Ergebnisse bleiben nicht vertrauenswürdig; bei Fehlern wird der Dienst nicht gewechselt.",
+    "webFetchApiKey": "API-Schlüssel",
+    "webFetchSharedKeyHint": "Dieser Schlüssel wird auch für den Chat mit diesem Anbieter verwendet. Änderungen oder das Entfernen wirken sich auf den Chat aus."
   },
   "workspace": {
     "untitledCourse": "未命名课堂",

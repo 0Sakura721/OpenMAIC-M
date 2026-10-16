@@ -1,3 +1,4 @@
+import { WEB_FETCH_PROVIDERS } from '@/lib/web-fetch/registry';
 import { describe, expect, it } from 'vitest';
 import { PROVIDERS } from '@/lib/ai/providers';
 import { ASR_PROVIDERS, TTS_PROVIDERS } from '@/lib/audio/constants';
@@ -16,6 +17,7 @@ const REGISTRIES: Record<SlotCapability, Record<string, unknown>> = {
   image: IMAGE_PROVIDERS,
   video: VIDEO_PROVIDERS,
   webSearch: WEB_SEARCH_PROVIDERS,
+  webFetch: WEB_FETCH_PROVIDERS,
   document: PDF_PROVIDERS,
 };
 
@@ -70,10 +72,12 @@ describe('provider presets', () => {
     expect(Object.keys(getProviderPreset('kimi-coding-plan')!.capabilities)).toEqual([
       'chat',
       'webSearch',
+      'webFetch',
     ]);
     expect(getProviderPreset('kimi')?.capabilities).toEqual({
       chat: { registryId: 'kimi' },
       webSearch: { registryId: 'kimi' },
+      webFetch: { registryId: 'kimi', baseUrl: undefined },
     });
   });
 
@@ -95,5 +99,12 @@ describe('provider presets', () => {
         if (models) expect(models, `${preset.id} → ${slot}`).toContain(model);
       }
     }
+  });
+});
+
+it('preserves the Coding Plan endpoint for web fetch', () => {
+  expect(getProviderPreset('kimi-coding-plan')?.capabilities.webFetch).toEqual({
+    registryId: 'kimi',
+    baseUrl: 'https://api.kimi.com/coding/v1',
   });
 });
