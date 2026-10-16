@@ -4,7 +4,7 @@ import { resolveSceneOutline } from '@/lib/agent/client/resolve-scene-outline';
 import { buildPeerContextSection } from '@/lib/orchestration/summarizers/peer-context';
 import { buildStateContext } from '@/lib/orchestration/summarizers/state-context';
 import { buildVirtualWhiteboardContext } from '@/lib/orchestration/summarizers/whiteboard-ledger';
-import { getActionDescriptions } from '@/lib/orchestration/tool-schemas';
+import { getActionDescriptions } from '@/lib/chat/pi/tool-schemas';
 import type { AgentTurnSummary, WhiteboardActionRecord } from '@/lib/orchestration/types';
 import type { StatelessChatRequest } from '@/lib/types/chat';
 
