@@ -1799,7 +1799,7 @@
     "tokenPlan": {
       "nav": "Token Plan",
       "title": "Token Plan Setup",
-      "desc": "Pick your token plan provider and enter the key — it auto-configures every adapted modality (LLM/image/video/speech/web search).",
+      "desc": "Pick your token plan provider and enter the key — it auto-configures every adapted modality (LLM/image/video/speech/web search/web fetch).",
       "selectPlan": "Select Provider",
       "apiKey": "API Key",
       "updateKey": "Update key",
@@ -1825,6 +1825,7 @@
       "capTts": "Síntese de voz",
       "capVideo": "Geração de vídeo",
       "capWebSearch": "Pesquisa na web",
+      "capWebFetch": "Buscar páginas web",
       "saved": "Ajustes de conexão salvos",
       "stageInteractive": "Interativo",
       "stageSlide": "Slides",
