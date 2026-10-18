@@ -833,6 +833,7 @@ Coding Plan のキーには `preset: kimi-coding-plan` と `llm: kimi:kimi-for-c
 | `builtin` | 不要 | ローカルの Readability/Turndown。PDF は `document` スロットを使用 |
 | `kimi` | 既存の Kimi プロバイダーのキーとベース URL | ホスト型の Markdown 抽出。PDF の URL にも対応 |
 | `deepseek` | 既存の DeepSeek チャットキーと API ベース | ホスト型 Markdown 抽出 |
+| `firecrawl` | Firecrawl の API キー（`preset: firecrawl`） | ホスト型の Markdown 抽出（ページの本文）。PDF の URL にも対応 |
 
 ```yaml
 providers:
@@ -849,5 +850,7 @@ slots:
 DeepSeek は `deepseek` プリセットでホスト型 Markdown 抽出も提供し、チャットのキーと API ベースを共有します。上の例のように `webFetch` を明示的に割り当てます。`/v1/tools/fetch` を使い、デプロイで指定したゲートウェイのベースを保持します。タイムアウトと転送エラーのみ 1 回再試行する動作は Kimi と同じで、HTTP エラーや不正な応答は再試行しません。
 
 **設定 → モデルサービス → Webページ取得** で既存の認証情報を使用し、**コースモデル設定 → Webページ取得** でサービスを選びます。キーは同じプロバイダーのチャットと共有され、変更や削除はチャットにも影響します。管理者が固定したカードは読み取り専用です。初回設定では、別のサービスを明示的に選ぶまで組み込みの既定値を維持します。ワークスペースの認証情報は公式 API のベース URL を使用でき、独自の取得エンドポイントとプロキシは管理者が `openmaic.yml` に記述する必要があります。
+
+`kimi` と異なり、`firecrawl` は専用のキーを使います。`openmaic.yml` で `preset: firecrawl` のプロバイダーと `apiKey`（例: `${FIRECRAWL_API_KEY}`）を宣言するか、**設定 → モデルサービス → Webページ取得** でキーを入力します。Bearer 認証で `POST /v2/scrape` を送り、ページの本文を Markdown で取得します。既定のベース URL は `https://api.firecrawl.dev` です。セルフホストの Firecrawl のベース URL は、管理者が `openmaic.yml` で宣言する必要があります。
 
 ホスト型サービスに URL を送る前に、セッションの URL 許可、厳密な URL 正規化、ローカル DNS の全アドレス検査を行います。返された最終 URL も、内容を受け入れる前に同じ検査を受けます。ホスト型サービス自身の DNS と中間リダイレクトはサービス側が制御するため、ローカルの検査ではそのネットワーク接続を固定できません。返されたテキストは信頼できないデータのままであり、認証チャレンジページの検出、バイト数制限、切り詰め表示、既存の Web 素材保存と `{trusted, untrusted}` の結果形式を適用します。

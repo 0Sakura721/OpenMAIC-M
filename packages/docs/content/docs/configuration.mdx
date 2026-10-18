@@ -833,6 +833,7 @@ When `openmaic.yml` is present, declare `providers.<id>: { preset: kimi }` and a
 | `builtin` | None | Local Readability/Turndown reader; PDFs use the `document` slot |
 | `kimi` | Existing Kimi provider key and base URL | Hosted Markdown extraction, including PDF URLs |
 | `deepseek` | Existing DeepSeek chat key and API base | Hosted Markdown extraction |
+| `firecrawl` | Firecrawl API key (`preset: firecrawl`) | Hosted Markdown extraction of the page's main content, including PDF URLs |
 
 ```yaml
 providers:
@@ -849,5 +850,7 @@ Both `kimi` and `kimi-coding-plan` presets offer `webFetch`. For Coding Plan cre
 DeepSeek also offers hosted Markdown extraction through the `deepseek` preset, reusing the chat key and API base. Assign `webFetch` explicitly as shown above. It uses `/v1/tools/fetch`; an explicit deployment gateway base is preserved. It retains the same transport deadlines and single transport-error retry as Kimi, without retrying HTTP errors or invalid responses.
 
 In **Settings → Model Services → Web Fetch**, use the existing provider credentials. The key is shared with that provider's chat service: editing or removing it also affects chat. Choose the reader in **Course Model Config → Web Fetch**. Administrator locks make the card read-only. First-run setup keeps the builtin default until a reader is explicitly selected. Workspace credentials can use official API bases; arbitrary fetch endpoints and proxies must be declared by the administrator in `openmaic.yml`.
+
+Unlike `kimi`, `firecrawl` has its own key: declare a provider with `preset: firecrawl` and `apiKey` (for example `${FIRECRAWL_API_KEY}`), or enter the key in **Settings → Model Services → Web Fetch**. It sends `POST /v2/scrape` with Bearer authentication and asks for the page's main content as Markdown. The default base is `https://api.firecrawl.dev`; a self-hosted Firecrawl base must be declared by the administrator in `openmaic.yml`.
 
 The session URL gate, strict URL normalization and all local DNS address checks run before forwarding a URL to a hosted reader. The same checks run against a reported final URL before accepting its content. Hosted readers control their own DNS and intermediate redirects; local checks cannot pin their networks. Their text remains untrusted, with challenge-page detection, byte limits, a truncation notice and the existing web material persistence and `{trusted, untrusted}` result.
