@@ -688,7 +688,7 @@ AliDocMind 的文件解析支援 PDF、DOCX、PPTX、XLSX，以及 PNG、JPG/JPE
 
 ### 聯網搜尋
 
-設定 Tavily、Exa、Bocha、Brave、Baidu、SearXNG 或 MiniMax：
+設定 Tavily、Exa、Firecrawl、Bocha、Brave、Baidu、SearXNG 或 MiniMax：
 
 ```bash
 TAVILY_API_KEY=
@@ -696,6 +696,9 @@ TAVILY_BASE_URL=           # 選填覆寫值
 
 EXA_API_KEY=
 EXA_BASE_URL=https://api.exa.ai  # 選填覆寫值
+
+FIRECRAWL_API_KEY=
+FIRECRAWL_BASE_URL=https://api.firecrawl.dev  # 選填覆寫值
 
 BOCHA_API_KEY=
 BOCHA_BASE_URL=            # 選填覆寫值
@@ -756,6 +759,8 @@ web-search:
     apiKey: tvly-...
   exa:
     apiKey: ...
+  firecrawl:
+    apiKey: fc-...
   searxng:
     baseUrl: http://localhost:8080
 ```
@@ -852,5 +857,7 @@ DeepSeek 也透過 `deepseek` 預設提供託管 Markdown 擷取，共用對話�
 在 **設定 → 模型服務 → 網頁擷取** 中使用既有供應商憑證。此金鑰與同一供應商的對話服務共用，修改或移除金鑰也會影響對話。在 **課程模型設定 → 網頁擷取** 中選擇讀取服務。管理員鎖定後，卡片為唯讀。首次設定會保留內建預設值，直到明確選擇其他讀取服務。工作區憑證可使用官方 API 基底網址；自訂擷取網址與代理必須由管理員在 `openmaic.yml` 中宣告。
 
 與 `kimi` 不同，`firecrawl` 使用獨立的金鑰：在 `openmaic.yml` 中宣告 `preset: firecrawl` 的供應商並設定 `apiKey`（例如 `${FIRECRAWL_API_KEY}`），或在 **設定 → 模型服務 → 網頁擷取** 中填寫金鑰。它以 Bearer 驗證傳送 `POST /v2/scrape`，以 Markdown 回傳頁面主要內容。預設基底網址為 `https://api.firecrawl.dev`；自行託管 Firecrawl 的基底網址須由管理員在 `openmaic.yml` 中宣告。
+
+同一個 `firecrawl` 供應商也提供網路搜尋（`POST /v2/search`）：一把金鑰和一個基底網址同時用於兩者，因此可以把同一個供應商同時指定給 `slots.webSearch` 和 `slots.webFetch`。舊版的 `FIRECRAWL_API_KEY` 和 `FIRECRAWL_BASE_URL` 變數設定的就是這個供應商；在把 `webFetch` 指定給它之前，網頁擷取仍使用 `builtin`。
 
 網址轉送至託管服務之前，必須通過工作階段網址授權、嚴格網址正規化及全部本機 DNS 位址檢查。接收內容前，也會對服務回傳的最終網址執行相同檢查。託管服務控制其自身的 DNS 和中間重新導向，本機檢查無法固定其網路連線。回傳的文字仍是不可信資料，經過驗證頁面偵測、位元組限制和截斷標記處理，並沿用網頁素材持久化及 `{trusted, untrusted}` 結果結構。

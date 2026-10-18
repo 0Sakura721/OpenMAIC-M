@@ -53,7 +53,9 @@ describe('web fetch registry and configuration', () => {
       registryId: 'firecrawl',
       apiKey: 'test-key',
     });
+    // One Firecrawl account serves web search and web fetch.
     expect(getProviderPreset('firecrawl')?.capabilities).toEqual({
+      webSearch: { registryId: 'firecrawl' },
       webFetch: { registryId: 'firecrawl' },
     });
   });

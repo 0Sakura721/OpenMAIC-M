@@ -5,6 +5,7 @@ import { searchWithClaude } from './claude';
 import { searchWithDeepSeek } from './deepseek';
 import { searchWithDoubao } from './doubao';
 import { searchWithExa } from './exa';
+import { searchWithFirecrawl } from './firecrawl';
 import { searchWithKimi } from './kimi';
 import { searchWithMiniMax } from './minimax';
 import { searchWithSearxng } from './searxng';
@@ -72,6 +73,8 @@ export async function searchWeb(params: {
       return searchWithDoubao({ query, apiKey, maxResults, baseUrl, ...abortOptions });
     case 'exa':
       return searchWithExa({ query, apiKey, maxResults, baseUrl, ...abortOptions });
+    case 'firecrawl':
+      return searchWithFirecrawl({ query, apiKey, maxResults, baseUrl, ...abortOptions });
     case 'kimi':
       return searchWithKimi({ query, apiKey, maxResults, baseUrl, ...abortOptions });
     case 'minimax':

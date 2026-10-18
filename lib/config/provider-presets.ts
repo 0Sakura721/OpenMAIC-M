@@ -187,6 +187,12 @@ const SHARED_ACCOUNT_PRESETS: ProviderPreset[] = [
     capabilities: { chat: { registryId: 'deepseek' }, webSearch: { registryId: 'deepseek' } },
   },
   {
+    id: 'firecrawl',
+    name: 'Firecrawl',
+    kind: 'single',
+    capabilities: { webSearch: { registryId: 'firecrawl' }, webFetch: { registryId: 'firecrawl' } },
+  },
+  {
     id: 'kimi',
     name: 'Kimi',
     kind: 'single',

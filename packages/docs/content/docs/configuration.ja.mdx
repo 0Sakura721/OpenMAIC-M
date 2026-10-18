@@ -688,7 +688,7 @@ AliDocMind のドキュメント解析は PDF、DOCX、PPTX、XLSX、PNG、JPG/J
 
 ### Web 検索
 
-Tavily、Exa、Bocha、Brave、Baidu、SearXNG、MiniMax を設定可能です。
+Tavily、Exa、Firecrawl、Bocha、Brave、Baidu、SearXNG、MiniMax を設定可能です。
 
 ```bash
 TAVILY_API_KEY=
@@ -696,6 +696,9 @@ TAVILY_BASE_URL=           # 任意の上書き
 
 EXA_API_KEY=
 EXA_BASE_URL=https://api.exa.ai  # 任意の上書き
+
+FIRECRAWL_API_KEY=
+FIRECRAWL_BASE_URL=https://api.firecrawl.dev  # 任意の上書き
 
 BOCHA_API_KEY=
 BOCHA_BASE_URL=            # 任意の上書き
@@ -756,6 +759,8 @@ web-search:
     apiKey: tvly-...
   exa:
     apiKey: ...
+  firecrawl:
+    apiKey: fc-...
   searxng:
     baseUrl: http://localhost:8080
 ```
@@ -852,5 +857,7 @@ DeepSeek は `deepseek` プリセットでホスト型 Markdown 抽出も提供�
 **設定 → モデルサービス → Webページ取得** で既存の認証情報を使用し、**コースモデル設定 → Webページ取得** でサービスを選びます。キーは同じプロバイダーのチャットと共有され、変更や削除はチャットにも影響します。管理者が固定したカードは読み取り専用です。初回設定では、別のサービスを明示的に選ぶまで組み込みの既定値を維持します。ワークスペースの認証情報は公式 API のベース URL を使用でき、独自の取得エンドポイントとプロキシは管理者が `openmaic.yml` に記述する必要があります。
 
 `kimi` と異なり、`firecrawl` は専用のキーを使います。`openmaic.yml` で `preset: firecrawl` のプロバイダーと `apiKey`（例: `${FIRECRAWL_API_KEY}`）を宣言するか、**設定 → モデルサービス → Webページ取得** でキーを入力します。Bearer 認証で `POST /v2/scrape` を送り、ページの本文を Markdown で取得します。既定のベース URL は `https://api.firecrawl.dev` です。セルフホストの Firecrawl のベース URL は、管理者が `openmaic.yml` で宣言する必要があります。
+
+同じ `firecrawl` プロバイダーは Web 検索（`POST /v2/search`）にも使えます。1 つのキーとベース URL で両方をまかなうため、1 つのプロバイダーを `slots.webSearch` と `slots.webFetch` の両方に割り当てられます。従来の `FIRECRAWL_API_KEY` と `FIRECRAWL_BASE_URL` 変数はこのプロバイダーを設定します。`webFetch` をこのプロバイダーに割り当てるまで、Webページ取得は `builtin` のままです。
 
 ホスト型サービスに URL を送る前に、セッションの URL 許可、厳密な URL 正規化、ローカル DNS の全アドレス検査を行います。返された最終 URL も、内容を受け入れる前に同じ検査を受けます。ホスト型サービス自身の DNS と中間リダイレクトはサービス側が制御するため、ローカルの検査ではそのネットワーク接続を固定できません。返されたテキストは信頼できないデータのままであり、認証チャレンジページの検出、バイト数制限、切り詰め表示、既存の Web 素材保存と `{trusted, untrusted}` の結果形式を適用します。

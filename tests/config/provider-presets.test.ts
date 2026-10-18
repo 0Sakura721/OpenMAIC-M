@@ -86,6 +86,21 @@ describe('provider presets', () => {
     });
   });
 
+  it('offers Firecrawl search and fetch as one shared-account preset', () => {
+    expect(PROVIDER_PRESETS.filter((preset) => preset.id === 'firecrawl')).toHaveLength(1);
+    expect(getProviderPreset('firecrawl')).toMatchObject({
+      kind: 'single',
+      capabilities: {
+        webSearch: { registryId: 'firecrawl' },
+        webFetch: { registryId: 'firecrawl' },
+      },
+    });
+    expect(Object.keys(getProviderPreset('firecrawl')!.capabilities).sort()).toEqual([
+      'webFetch',
+      'webSearch',
+    ]);
+  });
+
   it('carries plan recommendations onto slots', () => {
     const tokendance = getProviderPreset('tokendance')!;
     expect(tokendance.recommended).toMatchObject({

@@ -136,6 +136,37 @@ describe('translateLegacyConfig: media defaults', () => {
     expect(resolveSlot('webSearch', layers)).toMatchObject({ registryId: 'exa', apiKey: 'e' });
   });
 
+  it('keeps the earlier web search providers ahead of Firecrawl', () => {
+    const withClaude = translateLegacyConfig(
+      server({ webSearch: { firecrawl: { apiKey: 'f' }, claude: { apiKey: 'c' } } }),
+    );
+    expect(withClaude.config.slots?.webSearch).toBe('claude');
+    const alone = translateLegacyConfig(server({ webSearch: { firecrawl: { apiKey: 'f' } } }));
+    expect(alone.config.slots?.webSearch).toBe('firecrawl');
+  });
+
+  it('lets the legacy Firecrawl key serve web fetch once that slot is assigned', () => {
+    const { config } = translateLegacyConfig(
+      server({ webSearch: { firecrawl: { apiKey: 'f', baseUrl: 'https://fc.example.com' } } }),
+    );
+    expect(config.providers?.firecrawl).toEqual({
+      preset: 'firecrawl',
+      apiKey: 'f',
+      baseUrl: 'https://fc.example.com',
+    });
+    // Web fetch keeps its builtin default until it is assigned explicitly.
+    expect(config.slots?.webFetch).toBeUndefined();
+    const layers = [
+      { source: 'deployment' as const, config: { ...config, slots: { webFetch: 'firecrawl' } } },
+    ];
+    expect(resolveSlot('webFetch', layers)).toMatchObject({
+      status: 'assigned',
+      registryId: 'firecrawl',
+      apiKey: 'f',
+      baseUrl: 'https://fc.example.com',
+    });
+  });
+
   it('prefers DEFAULT_IMAGE_PROVIDER when it names a usable image provider', () => {
     const images = server({
       image: { seedream: { apiKey: 'sk' }, 'qwen-image': { apiKey: 'sk' } },

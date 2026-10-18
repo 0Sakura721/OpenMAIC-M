@@ -2,6 +2,7 @@
  * Web Search Provider Constants
  */
 
+import { FIRECRAWL_DEFAULT_BASE_URL, FIRECRAWL_OFFICIAL_BASE_URLS } from './firecrawl-endpoint';
 import type { BaiduSubSources, WebSearchProviderId, WebSearchProviderConfig } from './types';
 
 /** The provider a search that names none means when the server configures none. */
@@ -34,6 +35,15 @@ export const WEB_SEARCH_PROVIDERS: Record<WebSearchProviderId, WebSearchProvider
     requiresApiKey: true,
     defaultBaseUrl: 'https://api.exa.ai',
     endpointPath: '/search',
+  },
+  firecrawl: {
+    id: 'firecrawl',
+    name: 'Firecrawl',
+    // Shares the `firecrawl` provider (one key and base URL) with web fetch.
+    officialBaseUrls: FIRECRAWL_OFFICIAL_BASE_URLS,
+    requiresApiKey: true,
+    defaultBaseUrl: FIRECRAWL_DEFAULT_BASE_URL,
+    endpointPath: '/v2/search',
   },
   bocha: {
     id: 'bocha',

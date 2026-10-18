@@ -1,29 +1,28 @@
 import { withAbort } from '../abort';
 import type { WebFetchProvider } from '../types';
-
-/**
- * Firecrawl Scrape (`POST /v2/scrape`): returns the page's main content as Markdown.
- * Docs: https://docs.firecrawl.dev/features/scrape?utm_source=openmaic&utm_medium=integration
- */
-export const FIRECRAWL_DEFAULT_BASE_URL = 'https://api.firecrawl.dev';
+import {
+  FIRECRAWL_DEFAULT_BASE_URL,
+  firecrawlEndpoint,
+  isOfficialFirecrawlBaseUrl,
+} from '@/lib/web-search/firecrawl-endpoint';
 
 /** Endpoint identity comes from the configured API base; a self-hosted base keeps its path. */
 export function firecrawlScrapeEndpoint(baseUrl: string): string {
-  const base = new URL(baseUrl);
-  if (base.search || base.hash || base.username || base.password) {
-    throw new Error('Invalid web fetch API base URL');
-  }
-  const root = base.href.replace(/\/+$/, '');
-  return root.endsWith('/v2/scrape') ? root : `${root}/v2/scrape`;
+  return firecrawlEndpoint(baseUrl, 'scrape');
 }
 
+/**
+ * Firecrawl Scrape (`POST /v2/scrape`): returns the page's main content as Markdown.
+ * It shares the `firecrawl` provider (key and base URL) with Firecrawl web search.
+ * Docs: https://docs.firecrawl.dev/features/scrape?utm_source=openmaic&utm_medium=integration
+ */
 export const firecrawl: Extract<WebFetchProvider, { hosted: true }> = {
   id: 'firecrawl',
   name: 'Firecrawl',
   hosted: true,
   requiresApiKey: true,
   defaultBaseUrl: FIRECRAWL_DEFAULT_BASE_URL,
-  acceptsWorkspaceBaseUrl: (baseUrl) => baseUrl.replace(/\/+$/, '') === FIRECRAWL_DEFAULT_BASE_URL,
+  acceptsWorkspaceBaseUrl: isOfficialFirecrawlBaseUrl,
   resolveCredentials: (credentials = {}) => ({
     ...credentials,
     baseUrl: credentials.baseUrl ?? FIRECRAWL_DEFAULT_BASE_URL,
