@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Bug Fixes
 
 - A slide image whose box has a different shape from the image is now fitted inside the box the model laid out, centered, like `object-fit: contain`. Previously the box kept its width and changed its height, so a box flatter than its image grew downward and covered the text below it. Boxes within 10% of the image's ratio, and images with unknown dimensions, are unchanged. `@openmaic/generation` 0.3.25.
+- Narration: generated speech is prompted to keep Greek letters and named constants as symbols, because that text is also the caption (classroom, standalone HTML player, and narration export). Write π, not the homophone 派, and the same for θ, α, β, λ, ω, Σ, and the constant e. `@openmaic/generation` 0.3.28. [#1906](https://github.com/THU-MAIC/OpenMAIC/issues/1906)
 
 ## [1.3.0-rc.1] - 2026-10-22
 
