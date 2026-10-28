@@ -105,7 +105,7 @@ import { pendingQuestion } from './chat/question-card-state';
 import { QuestionForm } from './chat/question-form';
 import { composerTakeover } from './chat/question-form-state';
 import { shouldShowWorkbenchEmptyState, WorkbenchChatEmptyState } from './chat/empty-state';
-import { invalidateAgentSkills } from '@/lib/workbench/agent-skills';
+import { invalidateAgentSkills, useAgentSkills } from '@/lib/workbench/agent-skills';
 import { settleSentElementRefs } from '@/lib/workbench/element-ref-send-result';
 import { settleSentCourseRefs } from '@/lib/workbench/course-ref-send-result';
 
@@ -657,11 +657,17 @@ export function WorkbenchChat({
    * it). Both dismissals are recorded against the resulting draft, so nothing
    * reopens until the user types something new.
    */
-  /** Backspace deletes a whole `/handle`; see the hook for the IME guard. */
-  const onSkillHandleBackspace = useSkillHandleBackspace(setDraft, (next) => {
-    pendingCaret.current = next;
-    setCaret(next);
-  });
+  const { skills } = useAgentSkills();
+  const installedSkillNames = useMemo(() => skills.map((skill) => skill.name), [skills]);
+  /** Backspace deletes a resolving `/handle`; see the hook for the IME guard. */
+  const onSkillHandleBackspace = useSkillHandleBackspace(
+    setDraft,
+    (next) => {
+      pendingCaret.current = next;
+      setCaret(next);
+    },
+    installedSkillNames,
+  );
   const loadSkill = useCallback((skill: AgentSkillInfo) => {
     // The live selection, not the tracked state: the element is the freshest
     // answer either way.
