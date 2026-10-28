@@ -13,6 +13,8 @@
  *   `![](images/<file>)`; the parser records that file on each image
  *   (`metadata.path`), so a reference can be matched to its image. The
  *   markdown is parsed, not pattern-matched ({@link ownerDocumentOutcome}).
+ *   A MinerU gateway that hosts the images answers each as a URL: it is
+ *   downloaded here ({@link inlineRemoteImages}), and dropped if it cannot be.
  * - The built-in PDF parser and AliDocMind return images beside text that
  *   names none of them: the images are kept, there is nothing to rewrite.
  * - Plain text and markdown uploads return no images and keep their own text.
@@ -43,6 +45,8 @@ export type { ImagePathIndex } from './document-image-paths.mjs';
 
 import { MAX_DERIVED_IMAGES, prepareDerivedImage } from '@/lib/document/extractors/images';
 import type { DocumentArtifact, DocumentExtractorProvider } from '@/lib/document/types';
+import { STEP_DEADLINES_MS } from '@/lib/server/generation/run/deadline';
+import { inlineRemoteImages, remoteImageUrl } from '@/lib/server/materials/inline-images';
 
 import {
   decodeMediaAssetData,
@@ -63,24 +67,55 @@ interface KeptImage {
 }
 
 /**
+ * The bytes of the images the provider answered as URLs, as data URLs by
+ * index into `candidates`, downloaded within the extraction's time budget;
+ * an image missing from the answer could not be downloaded. An abort of
+ * `signal` (the extraction is cancelled) stops the downloads and fails this.
+ */
+async function downloadedImages(
+  candidates: ReadonlyArray<{ data?: string }>,
+  signal?: AbortSignal,
+): Promise<Map<number, string>> {
+  const remote = candidates.flatMap((asset, index) => {
+    const url = remoteImageUrl(asset.data);
+    return url ? [{ id: String(index), src: url }] : [];
+  });
+  if (remote.length === 0) return new Map();
+  const deadline = AbortSignal.timeout(STEP_DEADLINES_MS.materialAnalysis);
+  const { images } = await inlineRemoteImages(remote, { deadline, ...(signal ? { signal } : {}) });
+  return new Map(images.map((image) => [Number(image.id), image.src]));
+}
+
+/**
  * The document's images to keep, in provider order and within the bounds,
- * each prepared as WebP, keyed `img-<n>`. An image that cannot be decoded or
- * prepared is skipped.
+ * each prepared as WebP, keyed `img-<n>`. An image that cannot be downloaded,
+ * decoded or prepared is skipped; `notDownloaded` counts the downloads that
+ * failed, which may succeed another time.
  */
 async function keptImages(
   artifact: DocumentArtifact,
-): Promise<{ kept: Array<KeptImage & { path?: string }>; skipped: number }> {
+  signal?: AbortSignal,
+): Promise<{
+  kept: Array<KeptImage & { path?: string }>;
+  skipped: number;
+  notDownloaded: number;
+}> {
   const candidates = artifact.assets.filter((asset) => asset.type === 'image' && asset.data);
+  const downloaded = await downloadedImages(candidates, signal);
   const kept: Array<KeptImage & { path?: string }> = [];
   let skipped = 0;
-  for (const asset of candidates) {
+  let notDownloaded = 0;
+  for (const [index, asset] of candidates.entries()) {
     if (kept.length >= MAX_DERIVED_IMAGES) {
       skipped += 1;
       continue;
     }
     let prepared;
     try {
-      prepared = await prepareDerivedImage(decodeMediaAssetData(asset.data!));
+      const remote = remoteImageUrl(asset.data) !== undefined;
+      const data = remote ? downloaded.get(index) : asset.data;
+      if (remote && !data) notDownloaded += 1;
+      prepared = data ? await prepareDerivedImage(decodeMediaAssetData(data)) : null;
     } catch {
       prepared = null;
     }
@@ -102,7 +137,7 @@ async function keptImages(
       },
     });
   }
-  return { kept, skipped };
+  return { kept, skipped, notDownloaded };
 }
 
 /**
@@ -197,8 +232,9 @@ function cacheImagePlan(plan: ImagePlan, cacheKey?: string): void {
 export async function ownerDocumentOutcome(
   artifact: DocumentArtifact,
   provider: DocumentExtractorProvider,
+  options: { signal?: AbortSignal } = {},
 ): Promise<SourceExtractionOutcome> {
-  const { kept, skipped } = await keptImages(artifact);
+  const { kept, skipped, notDownloaded } = await keptImages(artifact, options.signal);
   const index = imagePathIndex(kept);
   // Uploads decoded by plain-text have no provider-owned image paths. MinerU
   // output still needs rewriting when all of its images are missing.
@@ -208,6 +244,7 @@ export async function ownerDocumentOutcome(
     ...(skipped > 0
       ? [`${skipped} document image(s) not kept (limit ${MAX_DERIVED_IMAGES}, or unreadable)`]
       : []),
+    ...(notDownloaded > 0 ? [`${notDownloaded} document image(s) could not be downloaded`] : []),
   ];
   let rewritten = { text: base.text, refs: [] as ImageReference[] };
   if (provider.id !== 'plain-text') {
@@ -229,6 +266,7 @@ export async function ownerDocumentOutcome(
     text: rewritten.text,
     imageRefs: rewritten.refs,
     images: kept.map(({ image }) => image),
+    ...(notDownloaded > 0 ? { imagesNotDownloaded: notDownloaded } : {}),
     stats: {
       ...base.stats,
       chars: rewritten.text.length,
