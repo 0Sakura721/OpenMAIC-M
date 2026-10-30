@@ -6,8 +6,12 @@ plugins {
  * Where `mobile/scripts/fetch-libnode.mjs` unpacked the nodejs-mobile release:
  * `bin/<abi>/libnode.so` plus `include/node`. Declared before the android block
  * because that block's closures read it during configuration.
+ *
+ * `rootDir` here is `mobile/android`, so one level up is `mobile/` — which is
+ * where the fetch script writes by default. CI sets LIBNODE_DIR explicitly so
+ * the two can never drift apart again.
  */
-def libnodeDir = file(System.getenv('LIBNODE_DIR') ?: "$rootDir/../../build/libnode").absolutePath
+def libnodeDir = file(System.getenv('LIBNODE_DIR') ?: "$rootDir/../build/libnode").absolutePath
 
 /**
  * Narrow the packaged ABIs: `-PabiFilters=arm64-v8a` (default) or `all`.
