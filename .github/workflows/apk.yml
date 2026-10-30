@@ -47,19 +47,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-
       # pnpm comes from package.json's `packageManager` field via corepack —
-      # the same route the repository's own CI takes. Passing a version here as
-      # well makes pnpm/action-setup fail on the mismatch.
+      # the same route the repository's own CI takes. It has to be enabled
+      # before setup-node, because `cache: pnpm` shells out to `pnpm store path`
+      # and fails when the binary is not on PATH yet.
       - name: Enable the repository's pnpm
         run: |
           corepack enable
           corepack install
           pnpm --version
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
