@@ -51,6 +51,11 @@ const nextConfig: NextConfig = {
     // egress cannot resolve their SDK in the shipped deployment.
     '@aws-sdk/client-s3',
     '@aws-sdk/s3-request-presigner',
+    // The Android build replaces `pg` with a PGlite-backed implementation of
+    // the same API (mobile/runtime/pg-pglite.mjs). Externalizing it is what
+    // makes that replacement possible: bundled, every route carries its own
+    // copy of node-postgres and there is no single module to stand in for.
+    'pg',
   ],
   experimental: {
     proxyClientMaxBodySize: '200mb',

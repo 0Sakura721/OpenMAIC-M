@@ -101,3 +101,18 @@ render-service/.owner-bound-parent-*/
 
 # Generated interactive libraries
 /public/vendor/interactive
+
+# --- Android / mobile build artifacts (see mobile/README.md) ---
+/mobile/build/
+/mobile/android/.gradle/
+/mobile/android/build/
+/mobile/android/local.properties
+/mobile/android/app/src/main/assets/payload.zip
+/mobile/android/app/src/main/jniLibs/
+/mobile/android/app/build/
+# The unpacked node payload and its download cache
+/mobile/payload/
+# Signing material must never be committed
+*.jks
+*.keystore
+!mobile/android/gradle/wrapper/gradle-wrapper.jar
