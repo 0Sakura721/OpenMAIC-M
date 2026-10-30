@@ -66,6 +66,9 @@ const DROP_ROOT_DIRS = new Set([
 /** Extensions never needed at runtime. */
 const DROP_EXTENSIONS = new Set(['.map', '.tsbuildinfo', '.md']);
 
+/** Dangling symlinks met while copying; reported rather than failing the build. */
+const dangling = [];
+
 /** Files at the standalone root that only exist for contributors. */
 const DROP_ROOT_FILES = new Set([
   'AGENTS.md',
@@ -119,24 +122,38 @@ async function sizeOf(target) {
 
 /**
  * Copy a tree, skipping build artefacts and anything the caller excludes.
- * Symlinks are followed: pnpm's store uses them, and a link that survived into
- * the payload would point outside the app's private storage on the phone.
+ *
+ * Symlinks are dereferenced: pnpm's store is a wall of them, and a link that
+ * survived into the payload would point outside the app's private storage on
+ * the phone. A *dangling* link is skipped rather than fatal — pnpm leaves those
+ * behind for optional dependencies it did not install (the standalone tracer
+ * copies `node_modules/.pnpm/node_modules/<name>` entries that only exist on
+ * some platforms), and none of them is reachable at runtime.
  */
 async function copyTree(from, to, options = {}) {
   const { skip } = options;
-  const info = await stat(from);
+  if (skip?.(from)) return;
+
+  let info;
+  try {
+    info = await stat(from);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      dangling.push(path.relative(standalone, from));
+      return;
+    }
+    throw error;
+  }
+
   if (!info.isDirectory()) {
     if (DROP_EXTENSIONS.has(path.extname(from))) return;
-    if (skip?.(from)) return;
     await mkdir(path.dirname(to), { recursive: true });
     await cp(from, to, { dereference: true });
     return;
   }
   await mkdir(to, { recursive: true });
   for (const entry of await readdir(from)) {
-    const source = path.join(from, entry);
-    if (skip?.(source)) continue;
-    await copyTree(source, path.join(to, entry), options);
+    await copyTree(path.join(from, entry), path.join(to, entry), options);
   }
 }
 
@@ -243,6 +260,13 @@ async function main() {
 
     const unpacked = await sizeOf(payload);
     console.log(`[payload] ${(unpacked / 1048576).toFixed(1)} MB unpacked`);
+    if (dangling.length > 0) {
+      // Reported, not fatal: these are optional dependencies pnpm never
+      // installed on this platform. If one were reachable at runtime, the
+      // payload boot check that runs next would fail on the missing module.
+      console.log(`[payload] skipped ${dangling.length} dangling symlink(s), e.g.:`);
+      for (const entry of dangling.slice(0, 5)) console.log(`[payload]   ${entry}`);
+    }
 
     await mkdir(path.dirname(outFile), { recursive: true });
     const written = await zip(payload, outFile, (progress) => {
