@@ -27,7 +27,7 @@
  * Usage:  node mobile/scripts/assemble-payload.mjs --out <path/to/payload.zip>
  */
 import { createRequire } from 'node:module';
-import { createWriteStream } from 'node:fs';
+import { createWriteStream, existsSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -217,10 +217,12 @@ async function main() {
     await copyTree(path.join(here, '..', 'runtime'), path.join(payload, 'mobile'));
 
     // ---- PGlite, which is not part of the Next bundle ----
-    const pgliteDir = path.dirname(require.resolve('@electric-sql/pglite/package.json'));
+    // Resolved through the package's own entry point rather than
+    // `<pkg>/package.json`: its `exports` map does not publish the manifest, so
+    // `require.resolve` on it throws.
+    const pgliteDir = resolvePackageDir('@electric-sql/pglite');
     await copyTree(pgliteDir, path.join(payload, 'node_modules', '@electric-sql', 'pglite'), {
-      // Keep the WASM engines and the JS; drop the source maps and CJS duplicates
-      // of the same build (the server is ESM).
+      // Keep the WASM engines and the JS; the source maps are 8 MB of nothing.
       skip: (source) => path.basename(source).endsWith('.map'),
     });
 
@@ -291,6 +293,27 @@ async function main() {
   } finally {
     await rm(staging, { recursive: true, force: true });
   }
+}
+
+/** The directory a bare package specifier resolves to, without reading its manifest. */
+function resolvePackageDir(specifier) {
+  let resolved;
+  try {
+    resolved = require.resolve(specifier);
+  } catch {
+    // Some packages only expose an ESM entry, which require.resolve cannot see.
+    resolved = require.resolve(`${specifier}/`).replace(/\/$/, '');
+  }
+  // Walk up until the directory that actually holds the manifest is found,
+  // so a resolved `dist/index.js` and a resolved `dist/` both land on the root.
+  let directory = path.dirname(resolved);
+  for (let depth = 0; depth < 6; depth++) {
+    if (existsSync(path.join(directory, 'package.json'))) return directory;
+    const parent = path.dirname(directory);
+    if (parent === directory) break;
+    directory = parent;
+  }
+  throw new Error(`could not locate the directory of ${specifier} (resolved to ${resolved})`);
 }
 
 /** Write a one-file package whose entry re-exports a module from mobile/. */
