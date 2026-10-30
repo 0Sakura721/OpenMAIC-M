@@ -27,7 +27,8 @@
  * Usage:  node mobile/scripts/assemble-payload.mjs --out <path/to/payload.zip>
  */
 import { createRequire } from 'node:module';
-import { createWriteStream, existsSync } from 'node:fs';
+import { createWriteStream, existsSync, readFileSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -216,6 +217,29 @@ async function main() {
     // ---- the mobile runtime: bootstrap + shims ----
     await copyTree(path.join(here, '..', 'runtime'), path.join(payload, 'mobile'));
 
+    // ---- Next's own runtime dependencies ----
+    // The standalone tracer follows what the *application* imports. Next's own
+    // published dependencies (`@swc/helpers`, `styled-jsx`, …) are loaded by
+    // Next at runtime through paths the tracer does not model, so they are
+    // absent from the standalone tree and the server dies on the first
+    // `@swc/helpers/_/_interop_require_default`. Copy each one that is
+    // declared and resolvable, and skip anything already present.
+    const nextPkg = JSON.parse(readFileSync(require.resolve('next/package.json'), 'utf8'));
+    const copied = [];
+    for (const dependency of Object.keys(nextPkg.dependencies ?? {})) {
+      const target = path.join(payload, 'node_modules', ...dependency.split('/'));
+      if (await exists(target)) continue;
+      let source;
+      try {
+        source = resolvePackageDir(dependency);
+      } catch {
+        continue; // Not installed (an optional or bundled dependency).
+      }
+      await copyTree(source, target);
+      copied.push(dependency);
+    }
+    if (copied.length > 0) console.log(`[payload] added Next runtime deps: ${copied.join(', ')}`);
+
     // ---- PGlite, which is not part of the Next bundle ----
     // Resolved through the package's own entry point rather than
     // `<pkg>/package.json`: its `exports` map does not publish the manifest, so
@@ -295,25 +319,55 @@ async function main() {
   }
 }
 
-/** The directory a bare package specifier resolves to, without reading its manifest. */
+/**
+ * The directory a bare package specifier resolves to.
+ *
+ * Tries, in order: a plain resolution from the repository root, then pnpm's
+ * content-addressed store (`.pnpm/<escaped-name>@<version>/node_modules/<name>`).
+ * The second is what makes this work for Next's own dependencies: under pnpm's
+ * default layout they are not hoisted to the top-level `node_modules`, so
+ * `require.resolve` cannot see them from the repository root even though they
+ * are installed — which is exactly how `@swc/helpers` went missing from the
+ * payload while being a hard Next runtime dependency.
+ */
 function resolvePackageDir(specifier) {
-  let resolved;
+  const fromRoot = createRequire(path.join(root, 'package.json'));
   try {
-    resolved = require.resolve(specifier);
+    let resolved;
+    try {
+      resolved = fromRoot.resolve(specifier);
+    } catch {
+      // Some packages only expose an ESM entry, which require.resolve cannot see.
+      resolved = fromRoot.resolve(`${specifier}/`).replace(/\/$/, '');
+    }
+    let directory = path.dirname(resolved);
+    for (let depth = 0; depth < 6; depth++) {
+      if (existsSync(path.join(directory, 'package.json'))) return directory;
+      const parent = path.dirname(directory);
+      if (parent === directory) break;
+      directory = parent;
+    }
   } catch {
-    // Some packages only expose an ESM entry, which require.resolve cannot see.
-    resolved = require.resolve(`${specifier}/`).replace(/\/$/, '');
+    // Fall through to the store lookup.
   }
-  // Walk up until the directory that actually holds the manifest is found,
-  // so a resolved `dist/index.js` and a resolved `dist/` both land on the root.
-  let directory = path.dirname(resolved);
-  for (let depth = 0; depth < 6; depth++) {
-    if (existsSync(path.join(directory, 'package.json'))) return directory;
-    const parent = path.dirname(directory);
-    if (parent === directory) break;
-    directory = parent;
+
+  // pnpm store layout, where `+` stands in for `/` in the scoped name and a
+  // peer-dependency hash may follow the version.
+  const escaped = specifier.replace('/', '+');
+  const storeDir = path.join(root, 'node_modules', '.pnpm');
+  if (existsSync(storeDir)) {
+    const prefix = `${escaped}@`;
+    const candidates = readdirSync(storeDir)
+      .filter((entry) => entry.startsWith(prefix))
+      .sort()
+      .reverse();
+    for (const candidate of candidates) {
+      const directory = path.join(storeDir, candidate, 'node_modules', ...specifier.split('/'));
+      if (existsSync(path.join(directory, 'package.json'))) return directory;
+    }
   }
-  throw new Error(`could not locate the directory of ${specifier} (resolved to ${resolved})`);
+
+  throw new Error(`could not locate ${specifier} in the repository or its pnpm store`);
 }
 
 /** Write a one-file package whose entry re-exports a module from mobile/. */
