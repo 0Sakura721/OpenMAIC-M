@@ -73,11 +73,14 @@ jobs:
           # script overrides DATABASE_URL at runtime.
           NEXT_TELEMETRY_DISABLED: '1'
 
-      - name: Verify the PGlite-backed pg replacement boots the server
-        run: node mobile/scripts/verify-runtime.mjs
-
       - name: Assemble the Android payload
         run: node mobile/scripts/assemble-payload.mjs --out "$RUNNER_TEMP/payload.zip"
+
+      # Runs against the packed archive, not the build tree, so it also proves
+      # the payload is complete: a file the pruner dropped shows up here as a
+      # module-not-found rather than as a crash on someone's phone.
+      - name: Verify the packed payload boots and can store a course
+        run: node mobile/scripts/verify-runtime.mjs --payload "$RUNNER_TEMP/payload.zip"
 
       - name: Report payload size
         run: ls -lh "$RUNNER_TEMP/payload.zip"
