@@ -224,9 +224,17 @@ async function main() {
     // `require('pg')` at runtime: it *copies the real package* into
     // `.next/node_modules/pg-<hash>/` and requires that path directly. So no
     // resolver hook can stand in for it — the fix is to make the copy be the
-    // stand-in. Every other external package is left as the build produced it.
+    // stand-in.
     await replaceTurbopackExternalCopy(payload, 'pg', 'pg-pglite.cjs');
     await replaceTurbopackExternalCopy(payload, 'sharp', 'sharp-shim.cjs');
+
+    // ---- give every remaining copy its own dependencies ----
+    // The copies are not isolated: a package only works if its own
+    // `dependencies` are resolvable from where the copy sits. Turbopack's
+    // tracer does not walk them, so `postcss`'s copy died on `picocolors`,
+    // and the next copy would die on the next missing name. Copying each
+    // copy's declared dependencies in is what makes them all loadable.
+    await satisfyExternalCopyDependencies(payload);
 
     // ---- Next's own runtime dependencies ----
     // The standalone tracer follows what the *application* imports. Next's own
@@ -455,6 +463,90 @@ async function replaceTurbopackExternalCopy(payload, packageName, shimFile) {
     console.log(`[payload] replaced external copy ${copy} -> ${relativeShim}`);
   }
   return copies.length;
+}
+
+/**
+ * Make each Turbopack external copy able to load its own dependencies.
+ *
+ * A copy at `.next/node_modules/<name>-<hash>/` resolves its `require`s
+ * relative to itself, so it sees `.next/node_modules/` before the payload's
+ * top-level `node_modules/`. Turbopack copies the package but not its
+ * dependency tree, which is why `postcss`'s copy failed on `picocolors` even
+ * though `picocolors` is installed.
+ *
+ * The fix walks each copy's `dependencies` (and `optionalDependencies`, which
+ * are skipped when absent) and copies them into `.next/node_modules/` next to
+ * the copy, recursively, so a dependency's own dependencies come with it.
+ * Existing entries are left alone: the payload's top-level `node_modules/` is
+ * already the right answer for anything the tracer did keep.
+ */
+async function satisfyExternalCopyDependencies(payload) {
+  const externalsDir = path.join(payload, '.next', 'node_modules');
+  if (!(await exists(externalsDir))) return;
+
+  /** Packages whose dependencies have been installed; guards cycles. */
+  const done = new Set();
+  let copied = 0;
+
+  const install = async (specifier) => {
+    if (done.has(specifier)) return;
+    done.add(specifier);
+
+    const target = path.join(externalsDir, ...specifier.split('/'));
+    if (!(await exists(target))) {
+      let source;
+      try {
+        source = resolvePackageDir(specifier);
+      } catch {
+        return; // Not installed here: an optional dependency, or a peer.
+      }
+      await copyTree(source, target, {
+        skip: (candidate) => {
+          const relative = path
+            .relative(source, candidate)
+            .split(path.sep)
+            .join('/');
+          // Native builds and source maps are dead weight on a phone.
+          if (/(^|\/)@img\//.test(relative)) return true;
+          return false;
+        },
+      });
+      copied++;
+    }
+
+    // Recurse through this package's own declared dependencies.
+    let manifest;
+    try {
+      manifest = JSON.parse(readFileSync(path.join(target, 'package.json'), 'utf8'));
+    } catch {
+      return;
+    }
+    const declared = {
+      ...(manifest.dependencies ?? {}),
+      ...(manifest.optionalDependencies ?? {}),
+    };
+    for (const dependency of Object.keys(declared)) {
+      await install(dependency);
+    }
+  };
+
+  for (const entry of await readdir(externalsDir)) {
+    const manifestPath = path.join(externalsDir, entry, 'package.json');
+    if (!(await exists(manifestPath))) continue;
+    let manifest;
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    } catch {
+      continue;
+    }
+    // The copy's own name is not its dependency; install what it needs.
+    for (const dependency of Object.keys(manifest.dependencies ?? {})) {
+      await install(dependency);
+    }
+  }
+  if (copied > 0) {
+    console.log(`[payload] installed ${copied} dependency package(s) for Turbopack externals`);
+  }
 }
 
 await main();
