@@ -9,11 +9,24 @@ plugins {
  */
 def libnodeDir = file(System.getenv('LIBNODE_DIR') ?: "$rootDir/../../build/libnode").absolutePath
 
-/** Narrow the packaged ABIs: `-PabiFilters=arm64-v8a` (default) or `all`. */
-def abiFilters = (project.findProperty('abiFilters') ?: 'arm64-v8a')
+/**
+ * Narrow the packaged ABIs: `-PabiFilters=arm64-v8a` (default) or `all`.
+ *
+ * Deliberately not named `abiFilters`: inside the `ndk { }` block below, a
+ * local variable of that name shadows the `abiFilters` method that block wants
+ * to call, and Gradle then reports "No signature of method:
+ * java.util.ArrayList.call()".
+ */
+def requestedAbis = (project.findProperty('abiFilters') ?: 'arm64-v8a')
         .split(',')
         .collect { it.trim() }
         .findAll { !it.isEmpty() }
+// `all` is a shorthand, not an ABI name: expand it to every one nodejs-mobile
+// ships. Leaving the literal in would make AGP look for a nonexistent ABI and
+// silently package none.
+if (requestedAbis == ['all']) {
+    requestedAbis = ['arm64-v8a', 'armeabi-v7a', 'x86_64']
+}
 
 /** Signing comes from the environment; absent locally, present on CI. */
 def keystorePath = System.getenv('OPENMAIC_KEYSTORE_PATH')
@@ -32,7 +45,7 @@ android {
         ndk {
             // Each libnode.so is ~85 MB, so the default build carries one ABI.
             // `-PabiFilters=all` packages every one the runtime ships.
-            abiFilters(*abiFilters)
+            abiFilters(*requestedAbis)
         }
         externalNativeBuild {
             cmake {
