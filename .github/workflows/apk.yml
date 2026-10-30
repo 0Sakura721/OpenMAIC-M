@@ -2,13 +2,15 @@ name: APK
 
 # Builds the Android app and uploads an installable release APK.
 #
-# Two separate things are compiled, and they cost very different amounts:
-#   - the web app (Next.js standalone) — a full production build of the whole
-#     repository, minutes of CPU and several GB of RAM;
-#   - the Android shell — Gradle + NDK, linking the JNI shim against libnode.so.
+# One job, not two. The web bundle and the APK shell are separate builds, but
+# they exchange a ~160 MB payload, and staging that through an artifact is both
+# slow and subject to the repository's artifact storage quota — which has
+# already failed this workflow once with "Artifact storage quota has been hit".
+# In a single job the payload is just a file on disk.
 #
-# Neither runs on a laptop here: everything is done on GitHub's runners, and the
-# resulting APK comes back as an artifact (and, for a tag, a Release asset).
+# Everything expensive runs here and nowhere else: a full Next.js production
+# build plus Gradle and the NDK are minutes of CPU and several GB of RAM, which
+# is exactly what a runner is for.
 
 on:
   push:
@@ -34,18 +36,23 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # Node 22 is what the repository's engines field and CI use; the device
-  # runtime is Node 24 (see mobile/scripts/fetch-libnode.mjs), and the server
-  # bundle is plain JS so the two do not have to match.
+  # Node 22 is what the repository's engines field and CI use. The *device*
+  # runtime is Node 24 (see mobile/scripts/fetch-libnode.mjs); the server bundle
+  # is plain JavaScript, so the two do not have to match.
   NODE_VERSION: '22'
+  # One ABI keeps the APK installable-sized: each libnode.so is ~85 MB.
+  ABI: ${{ inputs.abi || 'arm64-v8a' }}
+  NEXT_TELEMETRY_DISABLED: '1'
 
 jobs:
-  web:
-    name: Build the Node payload
+  build:
+    name: Build and sign the APK
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+
+      # ---------------------------------------------------------------- web
 
       # pnpm comes from package.json's `packageManager` field via corepack —
       # the same route the repository's own CI takes. It has to be enabled
@@ -69,45 +76,27 @@ jobs:
         run: pnpm build
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-          # The standalone server reads these at build time; the mobile startup
-          # script overrides DATABASE_URL at runtime.
-          NEXT_TELEMETRY_DISABLED: '1'
 
       - name: Assemble the Android payload
         run: node mobile/scripts/assemble-payload.mjs --out "$RUNNER_TEMP/payload.zip"
 
       # Runs against the packed archive, not the build tree, so it also proves
       # the payload is complete: a file the pruner dropped shows up here as a
-      # module-not-found rather than as a crash on someone's phone.
+      # module-not-found rather than as a crash on someone's phone. This is the
+      # check that caught the missing pg-types, the missing data directory and
+      # the missing @swc/helpers.
       - name: Verify the packed payload boots and can store a course
         run: node mobile/scripts/verify-runtime.mjs --payload "$RUNNER_TEMP/payload.zip"
 
       - name: Report payload size
         run: ls -lh "$RUNNER_TEMP/payload.zip"
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: node-payload
-          path: ${{ runner.temp }}/payload.zip
-          retention-days: 7
-          compression-level: 0
-
-  apk:
-    name: Build the APK
-    needs: web
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
+      # -------------------------------------------------------------- android
 
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
 
       # The runner image ships cmdline-tools somewhere under ANDROID_SDK_ROOT.
       # `android-actions/setup-android` is not used: its bundled `tools` package
@@ -132,12 +121,11 @@ jobs:
       - name: Fetch the Node.js Android runtime
         run: node mobile/scripts/fetch-libnode.mjs
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: node-payload
-          # The app inflates assets/payload.zip into private storage on first
-          # launch; the entry name is what NodePayload looks for.
-          path: mobile/android/app/src/main/assets
+      - name: Place the payload where Gradle packages it
+        run: |
+          set -euo pipefail
+          mkdir -p mobile/android/app/src/main/assets
+          cp "$RUNNER_TEMP/payload.zip" mobile/android/app/src/main/assets/payload.zip
 
       - name: Restore the signing keystore
         env:
@@ -148,8 +136,8 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${OPENMAIC_KEYSTORE_BASE64:-}" ]; then
-            # An unsigned release APK cannot be installed, so a green build
-            # that produces one is worse than a red build that says why.
+            # An unsigned release APK cannot be installed, so a green build that
+            # produces one is worse than a red build that says why.
             echo "::error::OPENMAIC_KEYSTORE_BASE64 is not set; the release APK would be unsigned."
             exit 1
           fi
@@ -166,15 +154,7 @@ jobs:
 
       - name: Build the release APK
         working-directory: mobile/android
-        run: |
-          set -euo pipefail
-          ABI="${{ inputs.abi || 'arm64-v8a' }}"
-          if [ "$ABI" = "all" ]; then
-            ./gradlew --no-daemon assembleRelease
-          else
-            # One ABI keeps the APK installable-sized: each libnode.so is ~85 MB.
-            ./gradlew --no-daemon assembleRelease -PabiFilters="$ABI"
-          fi
+        run: ./gradlew --no-daemon assembleRelease -PabiFilters="$ABI"
 
       - name: Rename and verify the APK
         run: |
@@ -188,7 +168,11 @@ jobs:
           BUILD_TOOLS="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
           "$BUILD_TOOLS/apksigner" verify --print-certs "$OUT"
 
-      - uses: actions/upload-artifact@v4
+      # Artifacts are best-effort: this repository has exhausted its artifact
+      # storage quota before, and that failure must not discard a working APK.
+      - name: Upload the APK as an artifact
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
         with:
           name: openmaic-m-apk
           path: ${{ env.APK }}
