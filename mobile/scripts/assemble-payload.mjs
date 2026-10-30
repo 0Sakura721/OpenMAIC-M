@@ -219,6 +219,15 @@ async function main() {
     // ---- the mobile runtime: bootstrap + shims ----
     await copyTree(path.join(here, '..', 'runtime'), path.join(payload, 'mobile'));
 
+    // ---- replace Turbopack's physical copies of external packages ----
+    // For a `serverExternalPackages` entry, Turbopack does not emit a
+    // `require('pg')` at runtime: it *copies the real package* into
+    // `.next/node_modules/pg-<hash>/` and requires that path directly. So no
+    // resolver hook can stand in for it — the fix is to make the copy be the
+    // stand-in. Every other external package is left as the build produced it.
+    await replaceTurbopackExternalCopy(payload, 'pg', 'pg-pglite.cjs');
+    await replaceTurbopackExternalCopy(payload, 'sharp', 'sharp-shim.cjs');
+
     // ---- Next's own runtime dependencies ----
     // The standalone tracer follows what the *application* imports. Next's own
     // published dependencies (`@swc/helpers`, `styled-jsx`, …) are loaded by
@@ -321,8 +330,7 @@ async function main() {
   }
 }
 
-/**
- * The directory a bare package specifier resolves to.
+/** The directory a bare package specifier resolves to.
  *
  * Tries, in order: a plain resolution from the repository root, then pnpm's
  * content-addressed store (`.pnpm/<escaped-name>@<version>/node_modules/<name>`).
@@ -391,6 +399,62 @@ async function writePackage(payload, dirName, packageName, entryLines) {
     ) + '\n',
   );
   await writeFile(path.join(dir, 'index.cjs'), entryLines.join('\n'));
+}
+
+/**
+ * Replace a Turbopack external-package copy with one of this payload's shims.
+ *
+ * A `serverExternalPackages` entry is emitted by Turbopack as a *physical copy*
+ * of the installed package under `.next/node_modules/<name>-<hash>/`, required
+ * by that literal path. So the package cannot be substituted by resolution —
+ * the copy itself has to be replaced. Each copy is removed and rewritten as a
+ * one-file package that re-exports the shim from `mobile/`.
+ *
+ * Returns the number of copies replaced; zero is not an error, because a build
+ * that inlined the package instead leaves nothing to replace (the resolver hook
+ * in `mobile/runtime/pg-hook.mjs` covers that case).
+ */
+async function replaceTurbopackExternalCopy(payload, packageName, shimFile) {
+  const externalsDir = path.join(payload, '.next', 'node_modules');
+  if (!(await exists(externalsDir))) return 0;
+
+  const prefix = `${packageName}-`;
+  const copies = (await readdir(externalsDir)).filter((entry) => entry.startsWith(prefix));
+  for (const copy of copies) {
+    const directory = path.join(externalsDir, copy);
+    await rm(directory, { recursive: true, force: true });
+    await mkdir(directory, { recursive: true });
+    await writeFile(
+      path.join(directory, 'package.json'),
+      JSON.stringify(
+        {
+          name: copy,
+          version: '0.0.0-mobile-shim',
+          private: true,
+          main: './index.cjs',
+        },
+        null,
+        2,
+      ) + '\n',
+    );
+    // Resolved relative to the copy, so the depth of `.next/node_modules/<copy>/`
+    // never has to be counted by hand.
+    const shimPath = path.join(payload, 'mobile', shimFile);
+    const relativeShim = path
+      .relative(directory, shimPath)
+      .split(path.sep)
+      .join('/');
+    await writeFile(
+      path.join(directory, 'index.cjs'),
+      [
+        "'use strict';",
+        `module.exports = require(${JSON.stringify(relativeShim)});`,
+        '',
+      ].join('\n'),
+    );
+    console.log(`[payload] replaced external copy ${copy} -> ${relativeShim}`);
+  }
+  return copies.length;
 }
 
 await main();
