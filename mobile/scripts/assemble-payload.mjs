@@ -194,17 +194,19 @@ async function main() {
     await copyTree(path.join(standalone, 'node_modules'), path.join(payload, 'node_modules'), {
       skip: (source) => {
         const relative = path.relative(standalone, source).split(path.sep).join('/');
-        // sharp's native builds are per-platform and there is no Android one.
+        // sharp's native builds are per-platform and there is no Android one;
+        // the payload ships mobile/sharp-shim.cjs in the package's place.
         if (relative === 'node_modules/sharp') return true;
         if (relative.startsWith('node_modules/.pnpm/') && /(^|\/)sharp@/.test(relative)) return true;
         if (/(^|\/)@img\//.test(relative)) return true;
-        // node-postgres is replaced by the PGlite shim; its own sources are dead
-        // weight, and keeping them would shadow the replacement's entry points.
+        // node-postgres is replaced by the PGlite stand-in. Every copy goes —
+        // the top-level one, pnpm's real one under .pnpm/, and the virtual
+        // node_modules/.pnpm/node_modules/pg link that pnpm keeps for packages
+        // whose dependencies are not hoisted. Missing one of those is what let
+        // the server resolve real node-postgres and die on `pg-types`.
         if (relative === 'node_modules/pg') return true;
-        if (relative.startsWith('node_modules/.pnpm/pg@') || relative.startsWith('node_modules/.pnpm/pg-pool@')) {
-          return true;
-        }
-        if (relative.startsWith('node_modules/.pnpm/pg-protocol@') || relative.startsWith('node_modules/.pnpm/pg-types@')) {
+        if (/(^|\/)node_modules\/pg$/.test(relative)) return true;
+        if (/node_modules\/\.pnpm\/(pg|pg-pool|pg-protocol|pg-types|pgpass|pg-connection-string)@/.test(relative)) {
           return true;
         }
         return false;

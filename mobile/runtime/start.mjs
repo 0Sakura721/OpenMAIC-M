@@ -70,6 +70,13 @@ async function main() {
   const dataDir = await resolveDataDir();
   log('data directory:', dataDir);
 
+  // --- 0. route every `pg` import to the embedded database --------------
+  // Installed before anything imports the server, because Next resolves its
+  // externalized `pg` import the first time a route module loads, and caches
+  // the result. See mobile/runtime/pg-hook.mjs.
+  const { installPgHook } = await import('./pg-hook.mjs');
+  installPgHook();
+
   // --- 1. the database ---------------------------------------------------
   const { openDatabase } = await import('./pg-pglite.cjs');
   const startedAt = Date.now();
