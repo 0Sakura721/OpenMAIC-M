@@ -30,6 +30,7 @@
 import http from 'node:http';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -72,6 +73,9 @@ async function main() {
   // --- 1. the database ---------------------------------------------------
   const { openDatabase } = await import('./pg-pglite.cjs');
   const startedAt = Date.now();
+  // PGlite creates its own data directory but not its parents, and on a fresh
+  // install none of them exist yet.
+  await mkdir(dataDir, { recursive: true });
   await openDatabase(path.join(dataDir, 'pg'));
   log('database ready in', Date.now() - startedAt, 'ms');
 
