@@ -118,15 +118,18 @@ jobs:
             echo "ANDROID_NDK_HOME=$SDK/ndk/27.2.12479018"
           } >> "$GITHUB_ENV"
 
-      # LIBNODE_DIR is set here and read by app/build.gradle, so the directory
-      # the archive is unpacked into and the directory Gradle links against can
-      # never disagree.
+      # LIBNODE_DIR is exported here and read by app/build.gradle, so the
+      # directory the archive is unpacked into and the directory Gradle links
+      # against cannot disagree. Note the path also has to be passed literally
+      # to the script below: a value written to $GITHUB_ENV only reaches later
+      # steps, not the rest of this one.
       - name: Fetch the Node.js Android runtime
         run: |
           set -euo pipefail
-          echo "LIBNODE_DIR=$GITHUB_WORKSPACE/mobile/build/libnode" >> "$GITHUB_ENV"
-          node mobile/scripts/fetch-libnode.mjs --dest "$LIBNODE_DIR"
-          ls -la "$LIBNODE_DIR/bin/arm64-v8a/libnode.so"
+          LIBNODE_PATH="$GITHUB_WORKSPACE/mobile/build/libnode"
+          echo "LIBNODE_DIR=$LIBNODE_PATH" >> "$GITHUB_ENV"
+          node mobile/scripts/fetch-libnode.mjs --dest "$LIBNODE_PATH"
+          ls -la "$LIBNODE_PATH/bin/arm64-v8a/libnode.so"
 
       - name: Place the payload where Gradle packages it
         run: |
