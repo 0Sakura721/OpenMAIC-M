@@ -38,7 +38,6 @@ env:
   # runtime is Node 24 (see mobile/scripts/fetch-libnode.mjs), and the server
   # bundle is plain JS so the two do not have to match.
   NODE_VERSION: '22'
-  PNPM_VERSION: '10.28.0'
 
 jobs:
   web:
@@ -48,14 +47,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+
+      # pnpm comes from package.json's `packageManager` field via corepack —
+      # the same route the repository's own CI takes. Passing a version here as
+      # well makes pnpm/action-setup fail on the mismatch.
+      - name: Enable the repository's pnpm
+        run: |
+          corepack enable
+          corepack install
+          pnpm --version
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
