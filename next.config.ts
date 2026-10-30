@@ -52,10 +52,17 @@ const nextConfig: NextConfig = {
     '@aws-sdk/client-s3',
     '@aws-sdk/s3-request-presigner',
     // The Android build replaces `pg` with a PGlite-backed implementation of
-    // the same API (mobile/runtime/pg-pglite.mjs). Externalizing it is what
+    // the same API (mobile/runtime/pg-pglite.cjs). Externalizing it is what
     // makes that replacement possible: bundled, every route carries its own
     // copy of node-postgres and there is no single module to stand in for.
     'pg',
+    // Same reason: `sharp` is a binding to libvips, and libvips has no Android
+    // build. Externalized, the mobile payload ships
+    // mobile/runtime/sharp-shim.cjs under the name `sharp` instead. It was
+    // already externalized implicitly by Next's own default list for this
+    // package; naming it here is what makes the payload's replacement
+    // authoritative rather than dependent on that default.
+    'sharp',
   ],
   experimental: {
     proxyClientMaxBodySize: '200mb',
