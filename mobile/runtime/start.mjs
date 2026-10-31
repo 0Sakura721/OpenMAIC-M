@@ -31,6 +31,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -110,7 +111,24 @@ async function main() {
   );
   process.env.__NEXT_PRIVATE_STANDALONE_CONFIG = JSON.stringify(required.config);
 
-  const next = (await import('next')).default;
+  // Loaded through `require`, not `import`.
+  //
+  // An ESM `import('next')` makes Node's ESM loader read
+  // `node_modules/next/package.json` while resolving the package scope, and on
+  // Android that read can fail in a way this runtime wraps as
+  //
+  //     Invalid package config …/node_modules/next/package.json
+  //
+  // even though the file is valid JSON (checked byte-for-byte on device). Node
+  // reports every non-ENOENT read failure under that name, so the message
+  // describes the symptom, not the cause — and the cause is on the ESM loader's
+  // path specifically. `require` takes the CommonJS resolver, which needs no
+  // package-scope read for a directory it can already see.
+  //
+  // `next` resolves to its CJS entry (`next/dist/...`), which is the same code
+  // the standalone server uses.
+  const nextModule = createRequire(import.meta.url)('next');
+  const next = nextModule.default ?? nextModule;
   const app = next({ dev: false, dir: projectDir, hostname: HOST, port: PORT, conf: required.config });
   await app.prepare();
   const handle = app.getRequestHandler();
