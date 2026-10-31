@@ -196,17 +196,20 @@ async function main() {
         const relative = path.relative(standalone, source).split(path.sep).join('/');
         // sharp's native builds are per-platform and there is no Android one;
         // the payload ships mobile/sharp-shim.cjs in the package's place.
-        if (relative === 'node_modules/sharp') return true;
-        if (relative.startsWith('node_modules/.pnpm/') && /(^|\/)sharp@/.test(relative)) return true;
-        if (/(^|\/)@img\//.test(relative)) return true;
-        // node-postgres is replaced by the PGlite stand-in. Every copy goes —
-        // the top-level one, pnpm's real one under .pnpm/, and the virtual
-        // node_modules/.pnpm/node_modules/pg link that pnpm keeps for packages
-        // whose dependencies are not hoisted. Missing one of those is what let
-        // the server resolve real node-postgres and die on `pg-types`.
-        if (relative === 'node_modules/pg') return true;
-        if (/(^|\/)node_modules\/pg$/.test(relative)) return true;
-        if (/node_modules\/\.pnpm\/(pg|pg-pool|pg-protocol|pg-types|pgpass|pg-connection-string)@/.test(relative)) {
+        //
+        // Matched on the *path shape* rather than on `.pnpm/sharp@`: pnpm also
+        // nests a package's dependencies under
+        // `.pnpm/<consumer>@<version>/node_modules/<name>`, so the real sharp
+        // survived at `.pnpm/next@…/node_modules/sharp` even after the
+        // top-level copy was dropped — and that path is reachable, because
+        // Next's own code resolves `sharp` from right there.
+        if (/(^|\/)node_modules\/(sharp|pg)$/.test(relative)) return true;
+        // `@img/*` holds sharp's prebuilt libvips bindings.
+        if (/(^|\/)node_modules\/@img(\/|$)/.test(relative)) return true;
+        // node-postgres is replaced by the PGlite stand-in. Its own package
+        // directories under .pnpm carry the real driver (and pull `pg-types`),
+        // which is what made the server answer 500 before.
+        if (/(^|\/)\.pnpm\/(pg|pg-pool|pg-protocol|pg-types|pgpass|pg-connection-string)@/.test(relative)) {
           return true;
         }
         return false;
@@ -312,6 +315,13 @@ async function main() {
       console.log(`[payload] skipped ${dangling.length} dangling symlink(s), e.g.:`);
       for (const entry of dangling.slice(0, 5)) console.log(`[payload]   ${entry}`);
     }
+
+    // Refuse to ship a payload that still carries a real node-postgres or a
+    // real sharp anywhere a `require` could reach it. Both are load-time
+    // failures on Android (no libvips, no PostgreSQL server), and both have
+    // slipped through once already — through a pnpm path shape the pruner did
+    // not anticipate — so this is checked rather than assumed.
+    await assertNoRealNativePackages(payload);
 
     await mkdir(path.dirname(outFile), { recursive: true });
     const written = await zip(payload, outFile, (progress) => {
@@ -547,6 +557,62 @@ async function satisfyExternalCopyDependencies(payload) {
   if (copied > 0) {
     console.log(`[payload] installed ${copied} dependency package(s) for Turbopack externals`);
   }
+}
+
+/**
+ * Fail if a real node-postgres or sharp is still present in the payload.
+ *
+ * The two shims only work if nothing else answers to those names first, and
+ * "first" is decided by Node's resolution walk: every `node_modules` directory
+ * between the requiring file and the filesystem root is a candidate. A single
+ * leftover copy — pnpm nests dependencies under
+ * `.pnpm/<consumer>@<ver>/node_modules/<name>`, which is neither the top level
+ * nor a `.pnpm/<name>@` entry — silently wins for the code living above it.
+ *
+ * The check looks for each package's manifest at any depth. A shim's manifest
+ * is identifiable: it declares version `0.0.0-mobile-shim`.
+ */
+async function assertNoRealNativePackages(payload) {
+  const offenders = [];
+
+  const walk = async (directory) => {
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const full = path.join(directory, entry.name);
+      if (entry.name === 'node_modules') {
+        // Check this node_modules' direct children for the two packages.
+        for (const name of ['pg', 'sharp']) {
+          const manifestPath = path.join(full, name, 'package.json');
+          if (!(await exists(manifestPath))) continue;
+          const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+          if (manifest.version !== '0.0.0-mobile-shim') {
+            offenders.push(path.relative(payload, path.join(full, name)));
+          }
+        }
+      }
+      // Recurse, but not into node_modules' own internals beyond one level of
+      // .pnpm, which is where the nested copies live.
+      await walk(full);
+    }
+  };
+
+  await walk(path.join(payload, 'node_modules'));
+  await walk(path.join(payload, '.next'));
+
+  if (offenders.length > 0) {
+    throw new Error(
+      'The payload still contains a real copy of a package the mobile build replaces:\n' +
+        offenders.map((entry) => `  ${entry}`).join('\n') +
+        '\nNode would resolve these before the shims and fail at load time on Android.',
+    );
+  }
+  console.log('[payload] verified: no real node-postgres or sharp anywhere in the payload');
 }
 
 await main();
