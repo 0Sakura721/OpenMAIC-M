@@ -35,6 +35,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { zip } from './lib/zip.mjs';
+import { MAX_PACKAGE_JSON_BYTES, shrinkPackageManifests } from './lib/shrink-manifests.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..', '..');
@@ -330,6 +331,22 @@ async function main() {
     // slipped through once already — through a pnpm path shape the pruner did
     // not anticipate — so this is checked rather than assumed.
     await assertNoRealNativePackages(payload);
+
+    // Node's package.json reader on this runtime fails above ~190 bytes (see
+    // shrink-manifests.mjs). Every bare specifier would fail, so the manifests
+    // are rewritten to fit, and anything that cannot fit stops the build.
+    const shrink = await shrinkPackageManifests(payload);
+    console.log(
+      `[payload] manifests: ${shrink.rewritten} shrunk, ${shrink.already} already small enough, ` +
+        `${(shrink.savedBytes / 1024).toFixed(0)} KB of metadata removed`,
+    );
+    if (shrink.unshrinkable.length > 0) {
+      throw new Error(
+        `These package.json files cannot be shrunk to ${MAX_PACKAGE_JSON_BYTES} bytes, so the ` +
+          `runtime would fail to resolve them:\n` +
+          shrink.unshrinkable.map((entry) => `  ${entry}`).join('\n'),
+      );
+    }
 
     await mkdir(path.dirname(outFile), { recursive: true });
     const written = await zip(payload, outFile, (progress) => {
