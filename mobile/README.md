@@ -4,6 +4,12 @@
 
 APK 由 GitHub Actions 编译，不从本机出包。
 
+## 下载
+
+最新构建在 [Releases](https://github.com/0Sakura721/OpenMAIC-M/releases)。当前为 `v1.0.0-m1`，只含 `arm64-v8a`（近年所有 Android 手机），约 232 MB。
+
+签名证书 SHA-256：`39:C5:69:D0:9E:7B:38:3A:51:E8:DF:67:26:CD:BB:31:D9:33:7F:41:CA:BC:B4:BC:6E:18:2C:06:8C:3A:65:E6` —— 与 `sign-key` 仓库记录一致，后续版本可覆盖安装。
+
 ## 它是什么
 
 OpenMAIC 原本是一个 Web 应用：Next.js 服务端 + PostgreSQL。手机上没有这两样东西，所以这个仓库补了三块：
@@ -15,15 +21,15 @@ OpenMAIC 原本是一个 Web 应用：Next.js 服务端 + PostgreSQL。手机上
 | 浏览器 | WebView 加载 `http://127.0.0.1:7010` | `mobile/android/app/src/main/java/ai/openmaic/mobile/MainActivity.java` |
 | `sharp`（libvips 绑定，没有 Android 版） | 只读文件头拿尺寸的替代实现 | `mobile/runtime/sharp-shim.cjs` |
 
-上层是**原样的 OpenMAIC**：`lib/`、`app/`、`packages/` 一行没改，所以课程生成、课堂播放、编辑器的行为跟网页版一致。
+上层是**原样的 OpenMAIC**：`lib/`、`app/`、`packages/` 只改了一处（`next.config.ts` 把 `pg` 和 `sharp` 标为 server-external，好让手机上的实现顶替它们），课程生成、课堂播放、编辑器的行为跟网页版一致。
 
 ## 编译
 
 推一个 tag 或手动触发 workflow：
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.0.0-m2
+git push origin v1.0.0-m2
 ```
 
 `APK` workflow 会依次做：
@@ -37,6 +43,10 @@ git push origin v1.0.0
 
 只想要一个能装的包做验证，触发 `workflow_dispatch` 即可，默认只打 `arm64-v8a`（每个 `libnode.so` 约 85 MB，三 ABI 会让包大到不好装）。
 
+### 为什么只有一个 job
+
+web 打包和 Android 编译本来是两件事，但它们之间要传一个 160 MB 的 payload。用 artifact 中转既慢又会撞上仓库的 artifact 存储配额（`Artifact storage quota has been hit` 已经让这个 workflow 失败过一次），所以现在合成一个 job —— 在同一个 job 里它就是磁盘上的一个文件。
+
 ## 装上去之后
 
 1. 首次启动会解压运行时（几十秒，屏幕上会显示进度）
@@ -44,6 +54,14 @@ git push origin v1.0.0
 3. 在设置里配置模型服务商 —— **App 本身不带任何 API key**，跟网页版一样由使用者自己填
 
 数据都在 App 私有目录里（`/data/data/ai.openmaic.mobile/files/openmaic`），卸载即清除。
+
+排查启动问题时看 logcat：
+
+```bash
+adb logcat -s OpenMAICNode OpenMAIC
+```
+
+Node 侧的 stdout/stderr 都被重定向到了 `OpenMAICNode` 这个 tag，包括 `OPENMAIC_READY http://127.0.0.1:7010` 这一行。
 
 ## 已知限制
 
@@ -55,6 +73,9 @@ git push origin v1.0.0
 - **数据库是单写入者。** PGlite 只有一个会话，事务是全局临界区 —— 这在单用户手机上正是想要的语义，但并发请求会排队而不是并行。
 - **`LISTEN/NOTIFY` 不工作。** 事件总线因此退回到轮询，只影响流式更新的延迟。
 - **首次启动慢。** 解压 + 首次路由编译在低端机上要几十秒。
+
+以上都是「没在真机上验证过」的范围：CI 能证明的是服务器起得来、数据库能写能读、APK 能装（签名有效），装到手机上之后的实际体验需要真机确认。
+
 
 ## 仓库结构
 
