@@ -415,9 +415,50 @@ public class MainActivity extends Activity {
     private void showDataMenu() {
         new android.app.AlertDialog.Builder(this)
                 .setTitle("数据")
-                .setItems(new String[] {"导出数据…", "恢复数据…"}, (dialog, which) -> {
+                .setItems(new String[] {"导出数据…", "恢复数据…", "应用设置…"}, (dialog, which) -> {
                     if (which == 0) startBackup();
-                    else startRestore();
+                    else if (which == 1) startRestore();
+                    else showSettings();
+                })
+                .show();
+    }
+
+    /**
+     * The app's own switches.
+     *
+     * Deliberately minimal: everything the web UI configures (providers, model
+     * settings) already has a screen; this is only for switches that belong to
+     * the shell around it.
+     */
+    private void showSettings() {
+        android.widget.LinearLayout panel = new android.widget.LinearLayout(this);
+        panel.setOrientation(android.widget.LinearLayout.VERTICAL);
+        int pad = dp(20);
+        panel.setPadding(pad, pad / 2, pad, 0);
+
+        android.widget.CheckBox allowLocal = new android.widget.CheckBox(this);
+        allowLocal.setText("允许访问局域网模型服务");
+        allowLocal.setChecked(DeviceSettings.readAllowLocalNetworks(this));
+        panel.addView(allowLocal);
+
+        android.widget.TextView hint = new android.widget.TextView(this);
+        hint.setText("勾选后，模型服务商可以填写局域网地址（如 LM Studio、Ollama 的 http://192.168.x.x:端口）。\n\n修改在下次启动应用后生效。\n\n仅在你信任所在网络时开启。");
+        hint.setTextSize(13);
+        hint.setTextColor(Color.rgb(107, 114, 128));
+        hint.setPadding(0, dp(8), 0, dp(12));
+        panel.addView(hint);
+
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("应用设置")
+                .setView(panel)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("保存", (dialog, which) -> {
+                    boolean checked = allowLocal.isChecked();
+                    if (checked == DeviceSettings.readAllowLocalNetworks(this)) return;
+                    runDataTask("正在保存…", () -> {
+                        DeviceSettings.writeAllowLocalNetworks(this, checked);
+                        return "设置已保存，下次启动生效";
+                    });
                 })
                 .show();
     }

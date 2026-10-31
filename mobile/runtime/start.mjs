@@ -102,6 +102,26 @@ async function main() {
   log('database ready in', Date.now() - startedAt, 'ms');
   status(`数据库就绪（${((Date.now() - startedAt) / 1000).toFixed(1)} 秒）`);
 
+  // --- 1b. device settings ------------------------------------------------
+  // The app writes <dataDir>/mobile-settings.json from its own settings
+  // screen; this is where its switches become environment the server reads.
+  // Read once at startup: the SSRF guard and every provider call read
+  // `process.env.ALLOW_LOCAL_NETWORKS` at call time, so setting it here covers
+  // the whole process. Changing the switch takes effect on next launch, which
+  // the settings screen says.
+  try {
+    const settings = JSON.parse(
+      readFileSync(path.join(dataDir, 'mobile-settings.json'), 'utf8'),
+    );
+    if (settings.allowLocalNetworks === true) {
+      process.env.ALLOW_LOCAL_NETWORKS = 'true';
+      log('allowLocalNetworks: enabled by device setting');
+    }
+  } catch {
+    // No settings file yet, or it is not valid JSON: every switch stays at its
+    // default. That is the correct outcome for a fresh install.
+  }
+
   // The application gates every persistence feature on this being non-empty;
   // the value itself is never dialled, because `pg` is the PGlite shim.
   process.env.DATABASE_URL ||= 'postgres://pglite@localhost/openmaic';
