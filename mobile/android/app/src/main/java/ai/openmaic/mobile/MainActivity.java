@@ -69,12 +69,21 @@ public class MainActivity extends Activity {
     /** Set once the port answered; onResume uses it to detect a killed process. */
     private volatile boolean serverWasReady = false;
 
+    /** The latest phase text from the server, shown with an elapsed counter. */
+    private volatile String splashPhase = "正在准备…";
+    /** When this boot attempt started; -1 before the timer arms it. */
+    private volatile long splashStartedAt = -1;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(buildLayout());
         configureWebView();
         requestNotificationPermission();
+        // The Node runtime reports each phase on stdout; the JNI log pipe calls
+        // back here, and this activity renders the line. Registered before the
+        // runtime starts so no early phase is missed.
+        NodeRuntime.setStatusListener(this);
 
         if (savedInstanceState == null && bootStarted.compareAndSet(false, true)) {
             startServerAndLoad();
@@ -83,6 +92,25 @@ public class MainActivity extends Activity {
         if (ACTION_DATA_MENU.equals(getIntent() == null ? null : getIntent().getAction())) {
             showDataMenu();
         }
+    }
+
+    /**
+     * Called from the Node runtime's thread for every {@code OPENMAIC_STATUS}
+     * line the server prints (see mobile/runtime/start.mjs).
+     *
+     * Two rules, both forced by the threading:
+     *
+     *   - the text must hop to the UI thread before touching the views;
+     *   - a phase that has already been superseded is skipped, so a slow line
+     *     arriving after success cannot drag the splash back over a working
+     *     page.
+     */
+    public void onNodeStatus(String text) {
+        if (text == null || text.isEmpty()) return;
+        runOnUiThread(() -> {
+            if (serverWasReady) return;
+            setStatus(text);
+        });
     }
 
     @Override
@@ -148,7 +176,8 @@ public class MainActivity extends Activity {
         splashGroup.addView(splashProgress, progressParams);
 
         splashStatus = new TextView(this);
-        splashStatus.setText("首次启动：正在解压运行时…");
+        splashPhase = "首次启动：正在解压运行时…";
+        splashStatus.setText(splashPhase);
         splashStatus.setTextSize(14);
         splashStatus.setTextColor(Color.rgb(107, 114, 128));
         splashStatus.setGravity(android.view.Gravity.CENTER);
@@ -262,6 +291,7 @@ public class MainActivity extends Activity {
         // Raise the foreground service first, so the runtime is never running
         // inside a process Android is free to freeze.
         ServerKeepAliveService.start(this);
+        startElapsedTimer();
         new Thread(() -> {
             try {
                 File payload = NodePayload.ensureUnpacked(this);
@@ -276,6 +306,30 @@ public class MainActivity extends Activity {
     }
 
     /**
+     * Show how long startup has taken, next to the phase text.
+     *
+     * The phase lines arrive every few seconds at best, and one of them ("打开
+     * 本地数据库") can legitimately sit for half a minute on a cold start. A
+     * counter is what tells an impatient user the app is alive and roughly how
+     * long is left, without anyone having to interpret the phases.
+     */
+    private void startElapsedTimer() {
+        splashStartedAt = System.currentTimeMillis();
+        final android.os.Handler handler = new android.os.Handler(getMainLooper());
+        final Runnable tick = new Runnable() {
+            @Override
+            public void run() {
+                if (serverWasReady || splash == null || splash.getVisibility() != View.VISIBLE) {
+                    return; // Done: stop ticking, leave the last text alone.
+                }
+                renderSplashStatus();
+                handler.postDelayed(this, 1000);
+            }
+        };
+        handler.postDelayed(tick, 1000);
+    }
+
+    /**
      * Poll the server until it answers.
      *
      * The runtime is ready when the port accepts connections, and there is no
@@ -286,7 +340,8 @@ public class MainActivity extends Activity {
      */
     private void waitForServerThenLoad() throws InterruptedException {
         long deadline = System.currentTimeMillis() + BOOT_TIMEOUT_MS;
-        setStatus("正在启动服务…");
+        // The progress text comes from the server itself (OPENMAIC_STATUS lines
+        // via onNodeStatus); this loop only watches for the port and hands over.
         while (System.currentTimeMillis() < deadline) {
             if (portAcceptsConnections()) {
                 serverWasReady = true;
@@ -309,12 +364,34 @@ public class MainActivity extends Activity {
 
     private void setStatus(String text) {
         runOnUiThread(() -> {
-            if (splashStatus != null) splashStatus.setText(text);
+            splashPhase = text == null ? "" : text;
+            renderSplashStatus();
         });
+    }
+
+    /**
+     * Phase text plus elapsed seconds.
+     *
+     * The phase line comes from the server and changes a few times per boot; the
+     * seconds come from a timer and change every second. Showing both together
+     * answers both questions an impatient user has — what is it doing, and is it
+     * stuck.
+     */
+    private void renderSplashStatus() {
+        if (splashStatus == null) return;
+        if (splashStartedAt < 0) {
+            splashStatus.setText(splashPhase);
+            return;
+        }
+        long seconds = (System.currentTimeMillis() - splashStartedAt) / 1000;
+        splashStatus.setText(splashPhase + "（已等待 " + seconds + " 秒）");
     }
 
     private void showFailure(Throwable error) {
         runOnUiThread(() -> {
+            // Freezes both the phase callback and the elapsed timer: whatever
+            // failed has to stay on screen until the user acts on it.
+            serverWasReady = true;
             if (splash == null) return;
             splash.setVisibility(View.VISIBLE);
             if (splashProgress != null) splashProgress.setVisibility(View.GONE);
@@ -461,6 +538,10 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        // The native side holds a global reference to this activity; dropping it
+        // here is what lets a destroyed activity be collected, and stops
+        // callbacks into an object whose views are gone.
+        NodeRuntime.setStatusListener(null);
         if (webView != null) {
             webView.destroy();
             webView = null;

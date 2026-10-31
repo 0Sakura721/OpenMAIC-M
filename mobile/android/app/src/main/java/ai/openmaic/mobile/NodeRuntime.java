@@ -3,12 +3,19 @@ package ai.openmaic.mobile;
 import android.util.Log;
 
 /**
- * Starts the embedded Node.js runtime on a background thread.
+ * Starts the embedded Node.js runtime on a background thread, and receives the
+ * progress it reports.
  *
- * {@link #start} blocks only until the thread is created; {@code node::Start}
+ * {@link #startNode} returns as soon as the thread is created; {@code node::Start}
  * never returns, because it runs the server's event loop. The Java side
- * therefore never joins it — the process lives as long as Android keeps the
- * app alive, and the runtime dies with the process.
+ * therefore never joins it — the process lives as long as Android keeps the app
+ * alive, and the runtime dies with the process.
+ *
+ * Progress arrives through {@link #setStatusListener}: the Node side prints
+ * lines prefixed with {@code OPENMAIC_STATUS}, the JNI log pipe recognises them
+ * and calls back into the listener's {@code onNodeStatus(String)}. That is how
+ * the splash screen shows what the server is doing during a first launch that
+ * takes tens of seconds.
  */
 final class NodeRuntime {
 
@@ -22,6 +29,15 @@ final class NodeRuntime {
     }
 
     private NodeRuntime() {}
+
+    /**
+     * Register (or clear, with {@code null}) the receiver for status lines.
+     *
+     * The object must be an instance of {@code MainActivity}, because the native
+     * side resolves {@code MainActivity.onNodeStatus(String)} once at load time
+     * and calls it on whatever thread the runtime is on.
+     */
+    static native void setStatusListener(Object listener);
 
     /**
      * @param args       argv for the runtime; argv[0] ("node") is prepended in C.

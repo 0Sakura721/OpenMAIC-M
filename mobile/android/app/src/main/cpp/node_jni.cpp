@@ -5,10 +5,17 @@
 // background thread; everything else — opening the database, booting the
 // Next.js server — is JavaScript, in `mobile/runtime/start.mjs`.
 //
-// Stdout and stderr are redirected into logcat. On Android the app process has
-// no controlling terminal, so without this every `console.log` in the server
-// (and every startup failure) is silently discarded, which makes a phone-side
-// problem impossible to diagnose.
+// Two things come back out of that thread:
+//
+//   1. Every stdout/stderr line is forwarded to logcat, so a phone-side failure
+//      is diagnosable without a debugger. The app process has no controlling
+//      terminal; without this the server's output is discarded.
+//
+//   2. Lines the app should *show the user* are also handed to Java through a
+//      callback. The first launch unpacks ~20k files and then boots a Next.js
+//      server, which takes tens of seconds on a phone — long enough that a
+//      static "starting…" reads as a hang. The Node side emits `OPENMAIC_STATUS`
+//      markers for each phase and the activity renders them.
 #include <jni.h>
 #include <pthread.h>
 #include <unistd.h>
@@ -25,6 +32,62 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 namespace {
+
+/** The prefix the Node side puts on lines meant for the splash screen. */
+constexpr const char* kStatusPrefix = "OPENMAIC_STATUS ";
+
+/**
+ * Java side of the status channel.
+ *
+ * `gJavaVm` is needed because the Node runtime runs on a thread this library
+ * created; attaching it to the JVM is the only way to call back into Java from
+ * there. The class and method are cached once, since `FindClass` on an
+ * arbitrary thread uses the system class loader and would not see app classes.
+ */
+struct StatusSink {
+  JavaVM* vm = nullptr;
+  jobject callback = nullptr;   // global ref to the listener
+  jmethodID method = nullptr;   // void onStatus(String)
+};
+
+StatusSink gStatus;
+
+/** Cached at load time from JNI_OnLoad, which runs on a Java thread. */
+JavaVM* gCachedVm = nullptr;
+jclass gActivityClass = nullptr;
+
+/**
+ * Hand one status line to Java.
+ *
+ * Attaches the calling thread if needed and detaches it again, so a long-lived
+ * Node thread does not leak a JNI attachment. Any failure is swallowed: a UI
+ * update must never take down the server.
+ */
+void publishStatus(const std::string& message) {
+  if (gStatus.vm == nullptr || gStatus.callback == nullptr || gStatus.method == nullptr) {
+    return;
+  }
+
+  JNIEnv* env = nullptr;
+  bool detach = false;
+  const jint state = gStatus.vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
+  if (state == JNI_EDETACHED) {
+    if (gStatus.vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return;
+    detach = true;
+  } else if (state != JNI_OK) {
+    return;
+  }
+
+  jstring text = env->NewStringUTF(message.c_str());
+  if (text != nullptr) {
+    env->CallVoidMethod(gStatus.callback, gStatus.method, text);
+    env->DeleteLocalRef(text);
+    // A pending exception from the Java side would abort the next JNI call.
+    if (env->ExceptionCheck()) env->ExceptionClear();
+  }
+
+  if (detach) gStatus.vm->DetachCurrentThread();
+}
 
 /**
  * The reader end of the stdout pipe, drained by a dedicated thread.
@@ -49,6 +112,12 @@ void* drainLogPipe(void* arg) {
       std::string line = pipe->pending.substr(0, newline);
       pipe->pending.erase(0, newline + 1);
       if (!line.empty() && line.back() == '\r') line.pop_back();
+
+      // Status markers go to the UI *and* to logcat: the log is what a bug
+      // report has, and it should show the same sequence the user saw.
+      if (line.rfind(kStatusPrefix, 0) == 0) {
+        publishStatus(line.substr(strlen(kStatusPrefix)));
+      }
       __android_log_write(ANDROID_LOG_INFO, LOG_TAG, line.c_str());
     }
   }
@@ -58,7 +127,7 @@ void* drainLogPipe(void* arg) {
   return nullptr;
 }
 
-/** Point fd 1 and 2 at a pipe whose other end feeds logcat. */
+/** Point fd 1 and 2 at a pipe whose other end feeds logcat and the UI. */
 void redirectStdioToLogcat() {
   int fds[2];
   if (pipe(fds) != 0) {
@@ -99,6 +168,46 @@ void* startNodeThread(void* arg) {
 }
 
 }  // namespace
+
+/**
+ * Cache the JVM and the activity class while a Java thread is on the stack.
+ *
+ * `FindClass` resolves through the caller's class loader. Called later from the
+ * Node thread it would look in the system loader and fail, so the class is
+ * resolved here once and kept as a global reference.
+ */
+extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /* reserved */) {
+  gCachedVm = vm;
+  JNIEnv* env = nullptr;
+  if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_OK && env != nullptr) {
+    jclass local = env->FindClass("ai/openmaic/mobile/MainActivity");
+    if (local != nullptr) {
+      gActivityClass = static_cast<jclass>(env->NewGlobalRef(local));
+      env->DeleteLocalRef(local);
+    }
+  }
+  return JNI_VERSION_1_6;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_ai_openmaic_mobile_NodeRuntime_setStatusListener(
+    JNIEnv* env, jclass /* clazz */, jobject listener) {
+  if (gStatus.callback != nullptr) {
+    env->DeleteGlobalRef(gStatus.callback);
+    gStatus.callback = nullptr;
+    gStatus.method = nullptr;
+  }
+  gStatus.vm = gCachedVm;
+  if (listener == nullptr || gActivityClass == nullptr || gStatus.vm == nullptr) return;
+
+  gStatus.callback = env->NewGlobalRef(listener);
+  gStatus.method = env->GetMethodID(gActivityClass, "onNodeStatus", "(Ljava/lang/String;)V");
+  if (gStatus.method == nullptr) {
+    LOGE("MainActivity.onNodeStatus(String) not found");
+    env->DeleteGlobalRef(gStatus.callback);
+    gStatus.callback = nullptr;
+  }
+}
 
 extern "C" JNIEXPORT jint JNICALL
 Java_ai_openmaic_mobile_NodeRuntime_startNode(

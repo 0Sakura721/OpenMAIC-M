@@ -67,9 +67,22 @@ function log(...args) {
   console.log('[openmaic-mobile]', ...args);
 }
 
+/**
+ * Report a phase to the splash screen.
+ *
+ * The Android shell watches stdout for this prefix and renders the text, so the
+ * user sees progress instead of a frozen "starting…" for the tens of seconds a
+ * first launch takes. It goes to stdout (not stderr) so it shares the same pipe
+ * and ordering as the log lines above it.
+ */
+function status(text) {
+  console.log(`OPENMAIC_STATUS ${text}`);
+}
+
 async function main() {
   const dataDir = await resolveDataDir();
   log('data directory:', dataDir);
+  status('正在准备本地环境…');
 
   // --- 0. route every `pg` import to the embedded database --------------
   // Installed before anything imports the server, because Next resolves its
@@ -79,6 +92,7 @@ async function main() {
   installPgHook();
 
   // --- 1. the database ---------------------------------------------------
+  status('正在打开本地数据库（首次启动较慢）…');
   const { openDatabase } = await import('./pg-pglite.cjs');
   const startedAt = Date.now();
   // PGlite creates its own data directory but not its parents, and on a fresh
@@ -86,6 +100,7 @@ async function main() {
   await mkdir(dataDir, { recursive: true });
   await openDatabase(path.join(dataDir, 'pg'));
   log('database ready in', Date.now() - startedAt, 'ms');
+  status(`数据库就绪（${((Date.now() - startedAt) / 1000).toFixed(1)} 秒）`);
 
   // The application gates every persistence feature on this being non-empty;
   // the value itself is never dialled, because `pg` is the PGlite shim.
@@ -106,32 +121,25 @@ async function main() {
   process.chdir(projectDir);
 
   // --- 3. the Next.js server --------------------------------------------
+  status('正在加载服务端…');
   const required = JSON.parse(
     readFileSync(path.join(projectDir, '.next', 'required-server-files.json'), 'utf8'),
   );
   process.env.__NEXT_PRIVATE_STANDALONE_CONFIG = JSON.stringify(required.config);
 
-  // Loaded through `require`, not `import`.
+  // Loaded through `require`, which is also how the standalone server loads it.
   //
-  // An ESM `import('next')` makes Node's ESM loader read
-  // `node_modules/next/package.json` while resolving the package scope, and on
-  // Android that read can fail in a way this runtime wraps as
-  //
-  //     Invalid package config …/node_modules/next/package.json
-  //
-  // even though the file is valid JSON (checked byte-for-byte on device). Node
-  // reports every non-ENOENT read failure under that name, so the message
-  // describes the symptom, not the cause — and the cause is on the ESM loader's
-  // path specifically. `require` takes the CommonJS resolver, which needs no
-  // package-scope read for a directory it can already see.
-  //
-  // `next` resolves to its CJS entry (`next/dist/...`), which is the same code
-  // the standalone server uses.
+  // This is *not* what fixes the package.json failures seen on device — that
+  // was the simdjson size limit, fixed in the payload by shrinking every
+  // manifest (mobile/scripts/lib/shrink-manifests.mjs). The `require` form is
+  // kept because it is one fewer moving part on the import path, and because
+  // it resolves to the same `next/dist` entry either way.
   const nextModule = createRequire(import.meta.url)('next');
   const next = nextModule.default ?? nextModule;
   const app = next({ dev: false, dir: projectDir, hostname: HOST, port: PORT, conf: required.config });
   await app.prepare();
   const handle = app.getRequestHandler();
+  status('正在监听端口…');
 
   const server = http.createServer((request, response) => {
     handle(request, response).catch((error) => {
@@ -146,6 +154,7 @@ async function main() {
     server.listen(PORT, HOST, resolve);
   });
   log(`listening on http://${HOST}:${PORT}`);
+  status('服务已就绪');
 
   // --- 4. tell the app it can load the page -----------------------------
   await announceReady(`http://${HOST}:${PORT}`);
