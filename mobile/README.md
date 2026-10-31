@@ -6,9 +6,11 @@ APK 由 GitHub Actions 编译，不从本机出包。
 
 ## 下载
 
-最新构建在 [Releases](https://github.com/0Sakura721/OpenMAIC-M/releases)。当前为 `v1.0.0-m1`，只含 `arm64-v8a`（近年所有 Android 手机），约 232 MB。
+最新构建在 [Releases](https://github.com/0Sakura721/OpenMAIC-M/releases)。当前为 `v1.0.0-m3`，只含 `arm64-v8a`（近年所有 Android 手机），约 232 MB。
 
 签名证书 SHA-256：`39:C5:69:D0:9E:7B:38:3A:51:E8:DF:67:26:CD:BB:31:D9:33:7F:41:CA:BC:B4:BC:6E:18:2C:06:8C:3A:65:E6` —— 与 `sign-key` 仓库记录一致，后续版本可覆盖安装。
+
+`m1` 有缺陷，不要用：它的 payload 里残留了真实的 `sharp` 源码，位于 Next 自己的 pnpm 嵌套目录下，真机上 `require('sharp')` 会先找到它而崩溃。`m3` 起由构建期断言把关，见下面「payload 是怎么保证干净的」。
 
 ## 它是什么
 
@@ -46,6 +48,20 @@ git push origin v1.0.0-m2
 ### 为什么只有一个 job
 
 web 打包和 Android 编译本来是两件事，但它们之间要传一个 160 MB 的 payload。用 artifact 中转既慢又会撞上仓库的 artifact 存储配额（`Artifact storage quota has been hit` 已经让这个 workflow 失败过一次），所以现在合成一个 job —— 在同一个 job 里它就是磁盘上的一个文件。
+
+### payload 是怎么保证干净的
+
+`pg` 和 `sharp` 都必须被替身顶掉，而「谁先被找到」由 Node 的解析顺序决定：从发起 require 的文件往上，每一层 `node_modules` 都是候选。所以只要有**任何一份**真包残留，它就可能赢过替身。
+
+这件事已经出过两次错，都是 pnpm 的目录形状造成的：
+
+- 第一次：`pg` 藏在 `node_modules/.pnpm/node_modules/pg`（pnpm 给未提升依赖留的虚拟目录），服务器起来后每个请求 500，报 `Cannot find module 'pg-types'`。
+- 第二次：`sharp` 藏在 `.pnpm/next@…/node_modules/sharp`（pnpm 把使用方的依赖也嵌进去），从 Next 自己的目录 `require('sharp')` 就会命中它。
+
+现在两条防线：
+
+1. 裁剪按**路径形状**匹配（`…/node_modules/(sharp|pg)`），覆盖 pnpm 的每一种布局；
+2. 打包后 `assertNoRealNativePackages` 扫描整个 payload，只要还有一份真包就**让构建失败**。替身的版本号是 `0.0.0-mobile-shim`，一眼可辨。
 
 ## 装上去之后
 

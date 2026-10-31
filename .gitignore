@@ -107,6 +107,7 @@ render-service/.owner-bound-parent-*/
 /mobile/android/.gradle/
 /mobile/android/build/
 /mobile/android/local.properties
+/mobile/build/
 /mobile/android/app/src/main/assets/payload.zip
 /mobile/android/app/src/main/jniLibs/
 /mobile/android/app/build/
