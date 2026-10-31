@@ -178,6 +178,38 @@ jobs:
           BUILD_TOOLS="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
           "$BUILD_TOOLS/apksigner" verify --print-certs "$OUT"
 
+      # The manifest is binary inside the APK, so "did my change get packaged"
+      # cannot be answered by reading the source. These assertions decode it and
+      # check the pieces whose absence is invisible until a phone runs it: the
+      # keep-alive service (without it the server dies when backgrounded) and
+      # the cleartext exemption (without it the WebView cannot reach loopback).
+      - name: Assert the packaged manifest has the keep-alive and cleartext config
+        run: |
+          set -euo pipefail
+          BUILD_TOOLS="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          AAPT2="$BUILD_TOOLS/aapt2"
+          [ -x "$AAPT2" ] || { echo "::error::aapt2 not found under $BUILD_TOOLS"; exit 1; }
+          "$AAPT2" dump xmltree "$APK" --file AndroidManifest.xml > "$RUNNER_TEMP/manifest.txt"
+          "$AAPT2" dump resources "$APK" > "$RUNNER_TEMP/resources.txt"
+
+          fail() { echo "::error::$1"; exit 1; }
+
+          grep -q 'ServerKeepAliveService' "$RUNNER_TEMP/manifest.txt" \
+            || fail "the keep-alive service is not in the packaged manifest"
+          grep -q 'foregroundServiceType' "$RUNNER_TEMP/manifest.txt" \
+            || fail "the keep-alive service declares no foregroundServiceType"
+          grep -q 'WAKE_LOCK' "$RUNNER_TEMP/manifest.txt" \
+            || fail "WAKE_LOCK permission missing"
+          grep -q 'FOREGROUND_SERVICE_DATA_SYNC' "$RUNNER_TEMP/manifest.txt" \
+            || fail "FOREGROUND_SERVICE_DATA_SYNC permission missing"
+          grep -q 'networkSecurityConfig' "$RUNNER_TEMP/manifest.txt" \
+            || fail "networkSecurityConfig is not set; cleartext loopback would be blocked"
+
+          # The config resource itself: aapt2 prints the file it compiled to.
+          grep -q 'network_security_config' "$RUNNER_TEMP/resources.txt" \
+            || fail "network_security_config resource is missing from resources.arsc"
+          echo "manifest assertions passed"
+
       # Artifacts are best-effort: this repository has exhausted its artifact
       # storage quota before, and that failure must not discard a working APK.
       - name: Upload the APK as an artifact
