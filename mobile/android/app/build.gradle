@@ -166,3 +166,20 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.7.1'
     implementation 'androidx.webkit:webkit:1.14.0'
 }
+
+/**
+ * Pin the Kotlin standard library.
+ *
+ * androidx.webkit pulls kotlin-stdlib 1.8.x while something else in the graph
+ * still asks for kotlin-stdlib-jdk7/jdk8 1.6.x, and since Kotlin 1.8 those
+ * jdk-specific artifacts' classes moved *into* the main stdlib — so both on the
+ * classpath is a hard duplicate-class error, not a version warning. Forcing
+ * the whole family onto one resolved version is the standard resolution.
+ */
+configurations.configureEach {
+    resolutionStrategy {
+        force 'org.jetbrains.kotlin:kotlin-stdlib:2.0.21'
+        force 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.0.21'
+        force 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.0.21'
+    }
+}
