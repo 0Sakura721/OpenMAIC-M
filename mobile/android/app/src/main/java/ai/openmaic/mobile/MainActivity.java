@@ -145,8 +145,16 @@ public class MainActivity extends Activity {
 
         webView = new WebView(this);
         webView.setBackgroundColor(Color.WHITE);
+        // Android 15 (targetSdk 35+) draws edge-to-edge by default: the window
+        // extends under the status bar, and the WebView paints behind it. The
+        // page is a desktop-oriented web app that knows nothing about notches,
+        // so its headers and dialogs render underneath the clock and the camera
+        // cutout. Padding the WebView container by the real inset is the fix
+        // that needs no upstream change: everything the page draws starts below
+        // the system bars, on every page, including dialogs.
         root.addView(webView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        applyDisplayCutoutPadding(root);
 
         LinearLayout splashGroup = new LinearLayout(this);
         splashGroup.setOrientation(LinearLayout.VERTICAL);
@@ -192,6 +200,53 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         return root;
+    }
+
+    /**
+     * Pad a full-screen container by the system bar insets.
+     *
+     * Applied to the root layout so both the WebView and the splash clear the
+     * status bar (and, for devices that route bars through cutout insets, the
+     * display cutout). The listener re-applies on rotation and on foldables,
+     * where the inset height changes.
+     *
+     * Edge-to-edge is only enforced from Android 15 / targetSdk 35; on older
+     * releases the status bar was already opaque and the window did not extend
+     * under it, so the insets read as zero and this is a no-op there.
+     */
+    private void applyDisplayCutoutPadding(FrameLayout container) {
+        // WindowInsets.Type and the ime() mask are API 30+. Below that the
+        // platform still draws an opaque status bar and resizes for the
+        // keyboard (adjustResize), so there is nothing to compensate for.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return;
+
+        final int basePaddingLeft = container.getPaddingLeft();
+        final int basePaddingTop = container.getPaddingTop();
+        final int basePaddingRight = container.getPaddingRight();
+        final int basePaddingBottom = container.getPaddingBottom();
+
+        android.view.View.OnApplyWindowInsetsListener listener = (view, insets) -> {
+            android.graphics.Insets bars =
+                    insets.getInsets(android.view.WindowInsets.Type.systemBars()
+                            | android.view.WindowInsets.Type.displayCutout()
+                            // adjustResize is ignored under edge-to-edge; the
+                            // keyboard arrives here instead. Padding the bottom
+                            // by it keeps the page's own input fields above the
+                            // keyboard.
+                            | android.view.WindowInsets.Type.ime());
+            container.setPadding(
+                    basePaddingLeft + bars.left,
+                    basePaddingTop + bars.top,
+                    basePaddingRight + bars.right,
+                    basePaddingBottom + bars.bottom);
+            // Consumed: the WebView content is the only thing here, and letting
+            // the inset propagate would double-apply it inside the page.
+            return insets.inset(bars.left, bars.top, bars.right, bars.bottom);
+        };
+        container.setOnApplyWindowInsetsListener(listener);
+
+        // Request the insets once now; the listener keeps them fresh afterwards.
+        container.requestApplyInsets();
     }
 
     private int dp(int value) {
