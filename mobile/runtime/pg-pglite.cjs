@@ -145,6 +145,55 @@ async function closeDatabase() {
   if (db) await db.close();
 }
 
+/**
+ * Serializes transactions across every client.
+ *
+ * PGlite has exactly one session, so two clients issuing `BEGIN` interleave on
+ * that session rather than getting their own transactions: the second `BEGIN`
+ * fails outright ("already a transaction in progress"), and even when it does
+ * not, a lock one transaction takes blocks the other *on the same session*,
+ * which can never resolve — a self-deadlock. Node-postgres callers assume a
+ * pool hands out independent sessions, and this application relies on that:
+ * `saveWorkspaceModelConfig` opens a transaction, takes `SELECT … FOR UPDATE`
+ * and an owner advisory lock, and the model-settings PUT route does that while
+ * a background pass may already be inside its own transaction.
+ *
+ * So a transaction becomes a critical section. The first client to reach
+ * `BEGIN` owns the database until it commits or rolls back; everyone else
+ * waits, exactly as they would queue for a connection on a real server. Within
+ * the owning client the flag lets its own statements through, or it would wait
+ * on itself.
+ */
+const transactionGate = {
+  tail: Promise.resolve(),
+  owner: null,
+};
+
+function acquireTransaction(client) {
+  if (transactionGate.owner === client) return Promise.resolve();
+  let release;
+  const held = new Promise((resolve) => {
+    release = resolve;
+  });
+  const previous = transactionGate.tail;
+  transactionGate.tail = previous.then(() => held).catch(() => {});
+  return previous.then(() => {
+    transactionGate.owner = client;
+    client._releaseTransaction = () => {
+      transactionGate.owner = null;
+      release();
+    };
+  });
+}
+
+/** True when `text` opens or closes a transaction block. */
+function transactionControl(text) {
+  const command = commandOf(text);
+  if (command === 'BEGIN') return 'begin';
+  if (command === 'COMMIT' || command === 'ROLLBACK') return 'end';
+  return null;
+}
+
 /** One session, presented as a node-postgres `Client`. */
 class PGliteClient {
   constructor(db) {
@@ -204,21 +253,52 @@ class PGliteClient {
     if (this._ended) throw new Error('Client has already been closed');
     const statement = normalise(text, values);
     const command = commandOf(statement.text);
-    // PGlite's errors already carry the PostgreSQL fields (`code`, `detail`,
-    // `constraint`, …) that callers branch on, so they propagate unchanged.
-    const result = await this._db.query(statement.text, statement.values);
-    return toResult(result.rows, result.fields, command);
+    const control = transactionControl(statement.text);
+
+    // Only `BEGIN` waits. Ordinary statements must not queue on the gate: a
+    // transaction owner issues them itself (so it would deadlock against
+    // itself), and a *non-owner* statement is already serialized correctly by
+    // PGlite — it runs on the one session the transaction is using, so it
+    // either sees committed state or runs before the transaction starts.
+    // Making plain queries wait here as well deadlocked the common case where
+    // a background pass queries while a save transaction is open.
+    if (control === 'begin') {
+      await acquireTransaction(this);
+    }
+
+    try {
+      // PGlite's errors already carry the PostgreSQL fields (`code`, `detail`,
+      // `constraint`, …) that callers branch on, so they propagate unchanged.
+      const result = await this._db.query(statement.text, statement.values);
+      return toResult(result.rows, result.fields, command);
+    } finally {
+      if (control === 'end' && transactionGate.owner === this && this._releaseTransaction) {
+        this._releaseTransaction();
+        this._releaseTransaction = null;
+      }
+    }
   }
 
   async end() {
     if (this._ended) return;
     this._ended = true;
+    // A client that goes away while holding the gate would stall every later
+    // transaction; release before announcing the end.
+    if (transactionGate.owner === this && this._releaseTransaction) {
+      this._releaseTransaction();
+      this._releaseTransaction = null;
+    }
     this._emit('end');
   }
 
   release() {
-    // Present because node-postgres clients from a pool are released rather
-    // than ended; there is nothing to hand back here.
+    // Called instead of end() when a pooled client is handed back. The
+    // transaction adapter always COMMITs or ROLLBACKs first, but a caller that
+    // throws between them still has to give the gate back.
+    if (transactionGate.owner === this && this._releaseTransaction) {
+      this._releaseTransaction();
+      this._releaseTransaction = null;
+    }
   }
 }
 
