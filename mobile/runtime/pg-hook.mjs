@@ -12,29 +12,34 @@
  * node-postgres and failing on its own `pg-types` dependency — while the
  * database it would have talked to does not exist on the device anyway.
  *
- * So the resolution is pinned here, before the server is imported:
+ * The interception is an exact match on the bare specifier `'pg'`. Subpaths
+ * (`pg/types`) and packages whose names merely start with `pg` are untouched.
  *
- *   - CommonJS: `Module._resolveFilename` answers `pg` with the stand-in.
- *   - ESM: a loader hook redirects the bare specifier.
+ * **CommonJS only, deliberately.** An earlier version also registered an ESM
+ * loader hook (`module.register` with a `data:` URL). That hook runs in a
+ * separate loader worker, and on a device it failed the very first ESM
+ * resolution with
  *
- * Both are exact matches on `'pg'`. Subpaths (`pg/types`) and other packages
- * whose names merely start with `pg` are untouched.
+ *     Invalid package config .../payload/package.json
+ *
+ * even though that file is valid JSON: the worker resolves the hook's own
+ * `parentURL` in a context where the package scope could not be read. The hook
+ * was also unnecessary — the Next server bundle is CommonJS, so every route's
+ * `import … from 'pg'` has already become `require('pg')`, and the physical
+ * `.next/node_modules/pg-<hash>` replacement covers the rest. Removing it
+ * removed the failure.
  */
 import Module from 'node:module';
 import path from 'node:path';
-import { register } from 'node:module';
-import { pathToFileURL } from 'node:url';
 
 const shimFile = path.join(import.meta.dirname, 'pg-pglite.cjs');
-const shimUrl = pathToFileURL(shimFile).href;
 
 let installed = false;
 
 export function installPgHook() {
-  if (installed) return;
+  if (installed) return undefined;
   installed = true;
 
-  // --- CommonJS ---------------------------------------------------------
   // Every route the server renders is CommonJS, and its `require` funnels
   // through this one function.
   const resolveFilename = Module._resolveFilename;
@@ -43,9 +48,9 @@ export function installPgHook() {
     return resolveFilename.call(this, request, ...rest);
   };
 
-  // The stand-in is loaded once here and left in the require cache, so a
-  // later `require('pg')` resolves to the same instance whether or not the
-  // patch above is still what answers it.
+  // Load the stand-in once and leave it in the require cache, so a later
+  // `require('pg')` gets the same instance whether or not the patch above is
+  // still what answers it.
   const shim = Module.createRequire(import.meta.url)(shimFile);
   Module._cache[shimFile] = {
     id: shimFile,
@@ -56,20 +61,6 @@ export function installPgHook() {
     children: [],
     paths: [],
   };
-
-  // --- ESM --------------------------------------------------------------
-  // @openmaic/storage is ESM, and so are the app's own modules when Turbopack
-  // loads them; an ESM `import` of `pg` never touches _resolveFilename.
-  register(
-    `data:text/javascript,${encodeURIComponent(`
-      const shim = ${JSON.stringify(shimUrl)};
-      export async function resolve(specifier, context, nextResolve) {
-        if (specifier === 'pg') return { url: shim, shortCircuit: true };
-        return nextResolve(specifier, context);
-      }
-    `)}`,
-    import.meta.url,
-  );
 
   return shim;
 }

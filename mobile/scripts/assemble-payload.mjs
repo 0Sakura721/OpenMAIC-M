@@ -62,6 +62,14 @@ const DROP_ROOT_DIRS = new Set([
   'scripts',
   'docs',
   'skills',
+  // The repository's own `mobile/` tree: the Android project, the build
+  // scripts and the runtime sources. Turbopack traces the whole directory into
+  // standalone because `next.config.ts` mentions it, but the only part the
+  // device runs is `mobile/runtime/` — which is copied in separately, below,
+  // as the payload's `mobile/`. Shipping the traced copy as well would put
+  // `mobile/android/` (a Gradle project) and `mobile/scripts/` (build tooling)
+  // on the phone, and leave two different `pg-hook.mjs` on the module path.
+  'mobile',
 ]);
 
 /** Extensions never needed at runtime. */
