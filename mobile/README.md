@@ -2,7 +2,7 @@
 
 把 [THU-MAIC/OpenMAIC](https://github.com/THU-MAIC/OpenMAIC) 做成一个能装在手机上的 App：**服务端、数据库、渲染全在手机本地跑，不需要电脑，不需要外网数据库**。
 
-APK 由 GitHub Actions 编译，不从本机出包。
+APK 由 GitHub Actions 编译，不从本机出包。版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 下载
 
