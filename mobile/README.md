@@ -6,14 +6,17 @@ APK 由 GitHub Actions 编译，不从本机出包。
 
 ## 下载
 
-最新构建在 [Releases](https://github.com/0Sakura721/OpenMAIC-M/releases)。当前为 `v1.0.0-m4`，只含 `arm64-v8a`（近年所有 Android 手机），约 232 MB。
+最新构建在 [Releases](https://github.com/0Sakura721/OpenMAIC-M/releases)。当前为 `v1.0.0-m5`，**只有 `arm64-v8a`**（近年所有 Android 手机），约 232 MB。tag 构建会拒绝发布非 arm64 的包。
 
 签名证书 SHA-256：`39:C5:69:D0:9E:7B:38:3A:51:E8:DF:67:26:CD:BB:31:D9:33:7F:41:CA:BC:B4:BC:6E:18:2C:06:8C:3A:65:E6` —— 与 `sign-key` 仓库记录一致，后续版本可覆盖安装。
 
-版本历史里有两次真实缺陷，都已修复：
+版本历史里的真实缺陷，都已修复：
 
 - `m1` 的 payload 残留真实 `sharp` 源码（在 Next 自己的 pnpm 嵌套目录下），真机上 `require('sharp')` 会先命中它。`m3` 起由构建期断言把关。
 - `m3` 及更早**切到后台就会停服**，且 **WebView 根本连不上本地服务**（targetSdk 36 默认禁明文 HTTP）。`m4` 修好。
+- `m4` 在模拟器上实测时，服务在 `import('next')` 处崩溃（`Invalid package config …/next/package.json`，而该文件是合法 JSON —— Node 把一切非 ENOENT 的读失败都报成这个名字）。`m5` 改走 `require`，绕开 ESM 的 package 作用域读取。
+
+**`m5` 尚未在 arm64 硬件上验证。** 那次崩溃来自模拟器（arm64 经 Houdini 转译运行），CI 只能证明 payload 在 x86 Linux 上能启动并读写课程 —— 这一点 `m4` 也做到了。真机结果需要你实测。
 
 ## 它是什么
 
