@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext HTTP is blocked by default from targetSdk 28 on, and this app's
+  entire UI is a WebView pointed at http://127.0.0.1:<port> — the server it
+  starts in its own process. Without an exception here the WebView refuses to
+  load the page and the app shows nothing.
+
+  The exception is scoped as narrowly as the platform allows:
+    - only `127.0.0.1` and `localhost` are permitted, never `*`;
+    - everything else keeps the secure default, so a course that links out to
+      an http:// site is still refused by the platform rather than silently
+      downgraded.
+  Loopback traffic never leaves the device, so allowing it in the clear costs
+  nothing: there is no network segment on which it could be observed.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

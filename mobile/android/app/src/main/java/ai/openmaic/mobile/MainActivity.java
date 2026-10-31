@@ -1,10 +1,13 @@
 package ai.openmaic.mobile;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
@@ -39,6 +42,9 @@ public class MainActivity extends Activity {
 
     private static final String TAG = "OpenMAIC";
 
+    /** Sent by the ongoing notification's "数据备份" action. */
+    static final String ACTION_DATA_MENU = "ai.openmaic.mobile.DATA_MENU";
+
     /** Where the in-process server listens. Loopback only: nothing is exposed. */
     static final int SERVER_PORT = 7010;
 
@@ -54,18 +60,54 @@ public class MainActivity extends Activity {
 
     private ValueCallback<Uri[]> fileChooserCallback;
     private static final int FILE_CHOOSER_REQUEST = 4001;
+    private static final int NOTIFICATION_PERMISSION_REQUEST = 4002;
+    private static final int REQUEST_BACKUP = 4003;
+    private static final int REQUEST_RESTORE = 4004;
 
     private final AtomicBoolean bootStarted = new AtomicBoolean(false);
+
+    /** Set once the port answered; onResume uses it to detect a killed process. */
+    private volatile boolean serverWasReady = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(buildLayout());
         configureWebView();
+        requestNotificationPermission();
 
         if (savedInstanceState == null && bootStarted.compareAndSet(false, true)) {
             startServerAndLoad();
         }
+        // A cold start from the notification's action.
+        if (ACTION_DATA_MENU.equals(getIntent() == null ? null : getIntent().getAction())) {
+            showDataMenu();
+        }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        // `singleTask`: the notification action re-enters the running activity
+        // here rather than creating a second one.
+        if (intent != null && ACTION_DATA_MENU.equals(intent.getAction())) {
+            showDataMenu();
+        }
+    }
+
+    /**
+     * Android 13+ needs the user's consent for the foreground service's ongoing
+     * notification. Declining does not stop the service from running — the
+     * notification is simply not shown — so this is requested quietly and the
+     * refusal is not treated as an error.
+     */
+    private void requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return;
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+        requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, NOTIFICATION_PERMISSION_REQUEST);
     }
 
     // ---------------------------------------------------------------- views
@@ -89,6 +131,13 @@ public class MainActivity extends Activity {
         title.setTextSize(28);
         title.setTextColor(Color.rgb(17, 24, 39));
         title.setGravity(android.view.Gravity.CENTER);
+        // A discoverable second route to the data menu, on the screen shown
+        // while the runtime unpacks. The notification action is the one that
+        // stays available afterwards.
+        title.setOnLongClickListener(view -> {
+            showDataMenu();
+            return true;
+        });
         splashGroup.addView(title);
 
         splashProgress = new ProgressBar(this);
@@ -210,6 +259,9 @@ public class MainActivity extends Activity {
     // ------------------------------------------------------------- lifecycle
 
     private void startServerAndLoad() {
+        // Raise the foreground service first, so the runtime is never running
+        // inside a process Android is free to freeze.
+        ServerKeepAliveService.start(this);
         new Thread(() -> {
             try {
                 File payload = NodePayload.ensureUnpacked(this);
@@ -237,6 +289,7 @@ public class MainActivity extends Activity {
         setStatus("正在启动服务…");
         while (System.currentTimeMillis() < deadline) {
             if (portAcceptsConnections()) {
+                serverWasReady = true;
                 runOnUiThread(() -> webView.loadUrl(START_URL));
                 return;
             }
@@ -274,6 +327,74 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------ back/exit
 
+    /**
+     * The backup/restore entry.
+     *
+     * Reached from the ongoing notification's action — the one surface that
+     * stays available while the app runs, since the WebView owns every touch
+     * once the page loads. The splash title is a second, discoverable route for
+     * the first launch.
+     */
+    private void showDataMenu() {
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("数据")
+                .setItems(new String[] {"导出数据…", "恢复数据…"}, (dialog, which) -> {
+                    if (which == 0) startBackup();
+                    else startRestore();
+                })
+                .show();
+    }
+
+    private void startBackup() {
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("application/zip")
+                .putExtra(Intent.EXTRA_TITLE, DataBackup.suggestedFileName());
+        try {
+            startActivityForResult(intent, REQUEST_BACKUP);
+        } catch (Exception error) {
+            Log.w(TAG, "no document provider for backup", error);
+            toast("没有可用的文件选择器");
+        }
+    }
+
+    private void startRestore() {
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("恢复数据")
+                .setMessage("这会用备份文件替换当前的课程与设置。\n当前数据会在替换前保留一份，成功后才删除。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("选择文件", (dialog, which) -> {
+                    Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                            .addCategory(Intent.CATEGORY_OPENABLE)
+                            .setType("application/zip");
+                    try {
+                        startActivityForResult(intent, REQUEST_RESTORE);
+                    } catch (Exception error) {
+                        Log.w(TAG, "no document provider for restore", error);
+                        toast("没有可用的文件选择器");
+                    }
+                })
+                .show();
+    }
+
+    /** Run a backup operation off the UI thread and report the outcome. */
+    private void runDataTask(String working, java.util.concurrent.Callable<String> task) {
+        toast(working);
+        new Thread(() -> {
+            try {
+                String summary = task.call();
+                runOnUiThread(() -> toast("完成：" + summary));
+            } catch (Exception error) {
+                Log.e(TAG, "data task failed", error);
+                runOnUiThread(() -> toast("失败：" + error.getMessage()));
+            }
+        }, "openmaic-data").start();
+    }
+
+    private void toast(String message) {
+        runOnUiThread(() -> android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_LONG).show());
+    }
+
     @Override
     public void onBackPressed() {
         if (webView != null && webView.canGoBack()) {
@@ -291,7 +412,51 @@ public class MainActivity extends Activity {
             fileChooserCallback = null;
             return;
         }
+        if (requestCode == REQUEST_BACKUP) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+                Uri target = data.getData();
+                runDataTask("正在导出…", () -> DataBackup.exportTo(this, target));
+            }
+            return;
+        }
+        if (requestCode == REQUEST_RESTORE) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+                Uri source = data.getData();
+                runDataTask("正在恢复…", () -> {
+                    String summary = DataBackup.importFrom(this, source);
+                    // The running server holds the old database open; the new
+                    // files only take effect on a fresh launch.
+                    return summary + "\n请重启 OpenMAIC 使恢复的数据生效。";
+                });
+            }
+            return;
+        }
         super.onActivityResult(requestCode, resultCode, data);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // The runtime lives in this process, so a process kill takes the server
+        // with it and the WebView is left holding a page whose backend is gone.
+        // Rather than let the user click into dead buttons, re-check the port
+        // and say so. A restart is not attempted: node::Start can only run once
+        // per process, so reviving it would need a fresh process.
+        if (serverWasReady && webView != null) {
+            new Thread(() -> {
+                if (portAcceptsConnections()) return;
+                runOnUiThread(this::showServerGone);
+            }, "openmaic-health").start();
+        }
+    }
+
+    private void showServerGone() {
+        if (splash == null) return;
+        splash.setVisibility(View.VISIBLE);
+        if (splashProgress != null) splashProgress.setVisibility(View.GONE);
+        if (splashStatus != null) {
+            splashStatus.setText("本地服务已停止（应用被系统回收）。\n请重新启动 OpenMAIC。");
+        }
     }
 
     @Override
@@ -299,6 +464,12 @@ public class MainActivity extends Activity {
         if (webView != null) {
             webView.destroy();
             webView = null;
+        }
+        // Only stop the service when the activity is finishing: a rotation or a
+        // configuration change also destroys it, and tearing the service down
+        // then would leave the runtime unprotected for the recreated activity.
+        if (isFinishing()) {
+            ServerKeepAliveService.stop(this);
         }
         super.onDestroy();
     }
