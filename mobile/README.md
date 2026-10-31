@@ -6,17 +6,36 @@ APK 由 GitHub Actions 编译，不从本机出包。
 
 ## 下载
 
-最新构建在 [Releases](https://github.com/0Sakura721/OpenMAIC-M/releases)。当前为 `v1.0.0-m5`，**只有 `arm64-v8a`**（近年所有 Android 手机），约 232 MB。tag 构建会拒绝发布非 arm64 的包。
+最新构建在 [Releases](https://github.com/0Sakura721/OpenMAIC-M/releases)。当前为 `v1.0.0-m6`，**只有 `arm64-v8a`**（近年所有 Android 手机），约 232 MB。tag 构建会拒绝发布非 arm64 的包。
 
 签名证书 SHA-256：`39:C5:69:D0:9E:7B:38:3A:51:E8:DF:67:26:CD:BB:31:D9:33:7F:41:CA:BC:B4:BC:6E:18:2C:06:8C:3A:65:E6` —— 与 `sign-key` 仓库记录一致，后续版本可覆盖安装。
 
-版本历史里的真实缺陷，都已修复：
+**`m6` 是第一个在 Android 上真正跑通的版本。** 在设备上实测：
 
-- `m1` 的 payload 残留真实 `sharp` 源码（在 Next 自己的 pnpm 嵌套目录下），真机上 `require('sharp')` 会先命中它。`m3` 起由构建期断言把关。
-- `m3` 及更早**切到后台就会停服**，且 **WebView 根本连不上本地服务**（targetSdk 36 默认禁明文 HTTP）。`m4` 修好。
-- `m4` 在模拟器上实测时，服务在 `import('next')` 处崩溃（`Invalid package config …/next/package.json`，而该文件是合法 JSON —— Node 把一切非 ENOENT 的读失败都报成这个名字）。`m5` 改走 `require`，绕开 ESM 的 package 作用域读取。
+```
+database ready in 27 s
+listening on http://127.0.0.1:7010
+GET  /api/health   -> 200
+GET  /             -> 200, 166 KB
+POST /api/stages   -> 201  建课成功
+GET  /api/stages   -> 读回同一门课
+```
 
-**`m5` 尚未在 arm64 硬件上验证。** 那次崩溃来自模拟器（arm64 经 Houdini 转译运行），CI 只能证明 payload 在 x86 Linux 上能启动并读写课程 —— 这一点 `m4` 也做到了。真机结果需要你实测。
+### 之前几个版本为什么不能用
+
+- `m1`：payload 残留真实 `sharp` 源码（在 Next 自己的 pnpm 嵌套目录下），真机上 `require('sharp')` 会先命中它。`m3` 起由构建期断言把关。
+- `m3` 及更早：**切到后台就停服**，且 **WebView 根本连不上本地服务**（targetSdk 36 默认禁明文 HTTP）。`m4` 修好。
+- `m4`/`m5`：服务能启动、数据库能开，但一 `require` 任何包就崩。根因见下。
+
+### 根因：nodejs-mobile 的 package.json 解析器有大小上限
+
+Node 用 simdjson 读 `package.json`（`src/node_modules.cc`），而 nodejs-mobile 这个构建在文档超过约 **190 字节**时解析失败 —— 设备上实测 190 字节通过、197 字节失败，错误一律报成 `ERR_INVALID_PACKAGE_CONFIG`，不说明原因。
+
+payload 里每个真实的 `package.json` 都远超这个大小，所以**所有裸包名 require 都失败**（`next`、`react`、`nanoid`……），而相对路径 require 和 `fs.readFileSync` 都正常 —— 这正是「服务起来了、数据库开了、然后 import 时死掉」的原因。
+
+`m6` 的做法：把 payload 里每个 manifest 收缩到 190 字节以内，只保留解析器真正读的字段（`name`/`version`/`type`/`main`/`exports`，放不下就丢 `exports`）。466 个 manifest 被收缩，删掉 1.2 MB 元数据。任何一个收缩不进去就让构建失败。
+
+这个排查过程里排除过三个错误假设（ESM loader 钩子、单纯的文件大小、字段内容），都写在了提交记录里。
 
 ## 它是什么
 
