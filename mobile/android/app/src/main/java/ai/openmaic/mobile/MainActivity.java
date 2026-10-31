@@ -54,6 +54,8 @@ public class MainActivity extends Activity {
     private static final long BOOT_TIMEOUT_MS = 180_000;
 
     private WebView webView;
+    /** The draggable settings handle that floats above the page. */
+    private View settingsHandle;
     private View splash;
     private TextView splashStatus;
     private ProgressBar splashProgress;
@@ -195,9 +197,56 @@ public class MainActivity extends Activity {
         statusParams.topMargin = dp(20);
         splashGroup.addView(splashStatus, statusParams);
 
+        // A labelled button on the splash, where a first-time user is already
+        // looking. The long-press and notification routes still exist; this is
+        // the one that does not have to be discovered.
+        android.widget.Button splashSettings = new android.widget.Button(this);
+        splashSettings.setText("应用设置");
+        splashSettings.setAllCaps(false);
+        splashSettings.setOnClickListener(v -> showSettingsDialog());
+        LinearLayout.LayoutParams settingsParams =
+                new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        settingsParams.topMargin = dp(32);
+        splashGroup.addView(splashSettings, settingsParams);
+
         splash = splashGroup;
         root.addView(splash, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // A small draggable handle that stays reachable once the page loads.
+        //
+        // The page owns every touch after that, so an in-shell control has to
+        // float above it. It is deliberately small, dimmed most of the time,
+        // and draggable: the user can park it wherever it is least in the way,
+        // and the position is remembered. Without it the only route in was the
+        // notification action (absent until the user grants notifications) or
+        // a long press on the splash title (gone once the page loads) — which
+        // is exactly how it got to be unfindable.
+        settingsHandle = buildSettingsHandle();
+        // Hidden while the splash is up: the splash has its own labelled
+        // "应用设置" button, and a floating circle over the logo would be noise.
+        settingsHandle.setVisibility(View.GONE);
+        FrameLayout.LayoutParams handleParams = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        handleParams.gravity = android.view.Gravity.TOP | android.view.Gravity.END;
+        handleParams.topMargin = dp(8);
+        handleParams.rightMargin = dp(8);
+        root.addView(settingsHandle, handleParams);
+        restoreHandlePosition(handleParams);
+
+        // A thin strip along the bottom edge that opens the data menu on a long
+        // press: the fallback for anyone who drags the handle off screen.
+        View menuStrip = new View(this);
+        menuStrip.setBackgroundColor(Color.TRANSPARENT);
+        menuStrip.setOnLongClickListener(view -> {
+            showDataMenu();
+            return true;
+        });
+        FrameLayout.LayoutParams stripParams = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(24));
+        stripParams.gravity = android.view.Gravity.BOTTOM;
+        root.addView(menuStrip, stripParams);
 
         return root;
     }
@@ -300,6 +349,9 @@ public class MainActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 if (splash != null && splash.getVisibility() == View.VISIBLE) {
                     splash.setVisibility(View.GONE);
+                    // The page now owns the screen; the floating handle is the
+                    // way back to the shell's settings from here on.
+                    if (settingsHandle != null) settingsHandle.setVisibility(View.VISIBLE);
                 }
             }
         });
@@ -473,7 +525,7 @@ public class MainActivity extends Activity {
                 .setItems(new String[] {"导出数据…", "恢复数据…", "应用设置…"}, (dialog, which) -> {
                     if (which == 0) startBackup();
                     else if (which == 1) startRestore();
-                    else showSettings();
+                    else showSettingsDialog();
                 })
                 .show();
     }
@@ -485,7 +537,103 @@ public class MainActivity extends Activity {
      * settings) already has a screen; this is only for switches that belong to
      * the shell around it.
      */
-    private void showSettings() {
+    /**
+     * The always-available settings handle: a small dimmed circle that opens the
+     * settings dialog on tap and can be dragged anywhere.
+     *
+     * Half-transparent at rest so it does not compete with the page, opaque
+     * while touched. Dragging uses raw deltas and writes the final position into
+     * the layout params, so the page underneath never sees the gesture.
+     */
+    private View buildSettingsHandle() {
+        TextView handle = new TextView(this);
+        handle.setText("⚙");
+        handle.setTextSize(18);
+        handle.setTextColor(Color.rgb(55, 65, 81));
+        handle.setGravity(android.view.Gravity.CENTER);
+        android.graphics.drawable.GradientDrawable background =
+                new android.graphics.drawable.GradientDrawable();
+        background.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+        background.setColor(Color.argb(230, 255, 255, 255));
+        background.setStroke(dp(1), Color.argb(60, 0, 0, 0));
+        handle.setBackground(background);
+        handle.setAlpha(0.55f);
+        handle.setContentDescription("应用设置");
+        int size = dp(44);
+        handle.setWidth(size);
+        handle.setHeight(size);
+
+        handle.setOnClickListener(v -> showSettingsDialog());
+
+        handle.setOnTouchListener(new View.OnTouchListener() {
+            private float downRawX, downRawY;
+            private int downLeft, downTop;
+            private boolean dragging;
+
+            @Override
+            public boolean onTouch(View view, android.view.MotionEvent event) {
+                FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) view.getLayoutParams();
+                switch (event.getActionMasked()) {
+                    case android.view.MotionEvent.ACTION_DOWN:
+                        downRawX = event.getRawX();
+                        downRawY = event.getRawY();
+                        // Measure where the handle actually is rather than
+                        // trusting the margins: while gravity-anchored the
+                        // margins are zero and the view sits at the top-end.
+                        int[] location = new int[2];
+                        view.getLocationInWindow(location);
+                        downLeft = location[0];
+                        downTop = location[1];
+                        dragging = false;
+                        view.setAlpha(1f);
+                        return false; // Let a simple tap reach the click listener.
+                    case android.view.MotionEvent.ACTION_MOVE: {
+                        float dx = event.getRawX() - downRawX;
+                        float dy = event.getRawY() - downRawY;
+                        if (!dragging && Math.hypot(dx, dy) < dp(8)) return false;
+                        dragging = true;
+                        params.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
+                        params.leftMargin = Math.max(0, Math.round(downLeft + dx));
+                        params.topMargin = Math.max(0, Math.round(downTop + dy));
+                        view.setLayoutParams(params);
+                        return true;
+                    }
+                    case android.view.MotionEvent.ACTION_UP:
+                    case android.view.MotionEvent.ACTION_CANCEL:
+                        view.setAlpha(0.55f);
+                        if (dragging) {
+                            rememberHandlePosition(params.leftMargin, params.topMargin);
+                            return true;
+                        }
+                        return false;
+                    default:
+                        return false;
+                }
+            }
+        });
+        return handle;
+    }
+
+    /** Restore where the user last parked the handle, if they moved it. */
+    private void restoreHandlePosition(FrameLayout.LayoutParams params) {
+        android.content.SharedPreferences prefs = getSharedPreferences("openmaic", MODE_PRIVATE);
+        int left = prefs.getInt("handleLeft", -1);
+        int top = prefs.getInt("handleTop", -1);
+        if (left < 0 || top < 0) return;
+        params.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
+        params.leftMargin = left;
+        params.topMargin = top;
+    }
+
+    private void rememberHandlePosition(int left, int top) {
+        getSharedPreferences("openmaic", MODE_PRIVATE)
+                .edit()
+                .putInt("handleLeft", left)
+                .putInt("handleTop", top)
+                .apply();
+    }
+
+    private void showSettingsDialog() {
         android.widget.LinearLayout panel = new android.widget.LinearLayout(this);
         panel.setOrientation(android.widget.LinearLayout.VERTICAL);
         int pad = dp(20);
