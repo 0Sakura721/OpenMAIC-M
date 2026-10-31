@@ -1,5 +1,12 @@
 cmake_minimum_required(VERSION 3.22.1)
 
+# Node 24's V8 headers require C++20 (they use concepts and constrained
+# templates in v8-local-handle.h). This must be set before any target is
+# created, and it only affects this shim — libnode.so is prebuilt.
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
 project(openmaic-mobile)
 
 # LIBNODE_DIR is passed by Gradle: the directory the nodejs-mobile release zip
@@ -21,5 +28,10 @@ target_include_directories(openmaic-node PRIVATE ${LIBNODE_DIR}/include/node)
 # Android builds are already built this way; this keeps the JNI shim matching.
 target_link_options(openmaic-node PRIVATE "-Wl,-z,max-page-size=16384")
 
+# libnode.so exports the C++ runtime symbols it was built against, and AGP links
+# the C++ shared runtime by default. Linking it explicitly keeps the JNI shim and
+# libnode on one runtime rather than two.
+target_link_libraries(openmaic-node libnode c++_shared)
+
 find_library(log-lib log)
-target_link_libraries(openmaic-node libnode ${log-lib})
+target_link_libraries(openmaic-node ${log-lib})
