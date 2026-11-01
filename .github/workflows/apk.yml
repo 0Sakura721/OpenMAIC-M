@@ -169,10 +169,12 @@ jobs:
         working-directory: mobile/android
         env:
           # The app compares its own version against the release tags when it
-          # checks for updates, so the tag has to be baked in. A tag without a
-          # milestone (a plain version) still gets a name; the code only has to
-          # be monotonic for Android's own upgrade rules.
-          OPENMAIC_VERSION_NAME: ${{ github.ref_name }}
+          # checks for updates, so the tag has to be baked in.
+          #
+          # A branch build gets `0.0.0-<ref>`, which ranks below every release
+          # and keeps the settings screen from printing a version like `main`
+          # that means nothing when compared with a tag.
+          OPENMAIC_VERSION_NAME: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('0.0.0-{0}', github.ref_name) }}
           OPENMAIC_VERSION_CODE: ${{ github.run_number }}
         run: ./gradlew --no-daemon assembleRelease -PabiFilters="$ABI"
 

@@ -887,7 +887,7 @@ public class MainActivity extends Activity {
     }
 
     private void showUpdateAvailable(UpdateChecker.Result result) {
-        String notes = result.notes == null ? "" : result.notes.trim();
+        String notes = plainText(result.notes);
         if (notes.length() > 1200) notes = notes.substring(0, 1200) + "…";
         new android.app.AlertDialog.Builder(this)
                 .setTitle("有新版本 " + result.version)
@@ -904,6 +904,30 @@ public class MainActivity extends Activity {
                             }
                         })
                 .show();
+    }
+
+    /**
+     * Strip the Markdown the release notes are written in.
+     *
+     * An AlertDialog renders plain text, so headings arrived as literal `###`
+     * and bold text as `**`, which reads like a transmission error rather than
+     * a changelog. Only the constructs that actually appear in these notes are
+     * handled; this is not a general Markdown renderer and should not pretend to
+     * be one.
+     */
+    private static String plainText(String markdown) {
+        if (markdown == null) return "";
+        String text = markdown;
+        // Links: keep the label, drop the URL, unless the label is the URL.
+        text = text.replaceAll("\\[([^\\]]+)\\]\\((https?://[^)]+)\\)", "$1");
+        // Headings and emphasis markers.
+        text = text.replaceAll("(?m)^#{1,6}\\s*", "");
+        text = text.replaceAll("\\*\\*([^*]+)\\*\\*", "$1");
+        text = text.replaceAll("(?m)^\\s*[-*]\\s+", "· ");
+        // Table separator rows carry no meaning once the pipes are gone.
+        text = text.replaceAll("(?m)^\\s*\\|?[\\s:|-]+\\|\\s*$", "");
+        text = text.replace('|', ' ');
+        return text.trim();
     }
 
     private void startBackup() {

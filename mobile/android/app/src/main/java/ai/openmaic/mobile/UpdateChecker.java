@@ -164,6 +164,11 @@ final class UpdateChecker {
      * below `v1.0.0-m1`. That is intentional: while this port is in milestone
      * builds, a bare tag is not a newer thing to install. When a real 1.0.0
      * ships this should become the top of its major line.
+     *
+     * Anything without a leading number ranks 0. A build from a branch has a
+     * versionName of `main` or similar, and ranking that 0 means every release
+     * looks newer than it — which is correct for a local build that cannot know
+     * where it sits, and only affects builds that never reach Releases.
      */
     private static int versionRank(String tag) {
         if (tag == null || tag.isEmpty()) return 0;
