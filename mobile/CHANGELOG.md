@@ -12,6 +12,34 @@ OpenMAIC 安卓版自己的变更记录。上游（[THU-MAIC/OpenMAIC](https://g
 
 ---
 
+## [v1.0.0-m13] — 2026-11-01
+
+修复生成课程必然失败、以及升级后已保存密钥全部失效。两者同源：**放在代码目录里、却必须长期存活的东西**，被当成了可以随意替换的。
+
+### 修复
+
+- **生成课程报 `Prompt template not found`**。装配 payload 时会丢掉所有 `.md` 文件，而 prompt 模板恰恰是 Markdown（`lib/prompts/templates/<id>/system.md`，以及它们 include 的 snippets）。`loadPrompt` 把「文件不存在」当成「没有模板」返回 `null`，于是生成被拒绝——不崩溃、不报错，只是走到一半失败，所以连着三个版本发出去都没被发现。
+
+  验证方式：解开 m12 的 APK，`payload.zip` 里 `templates/*/system.md` 的数量是 **0**；而 Next 自己的依赖追踪清单列出了 329 个 `.md`，它一直认为这些是运行时资源。
+
+  `templates/` 与 `snippets/` 目录下的 Markdown 现在按数据保留。装配脚本新增断言：一个模板都找不到就让构建失败，不让它再静默分发。
+
+- **升级后已保存的 API 密钥全部失效**。日志原话：
+
+  > OPENMAIC_SECRET_KEY is not set and …/instance-secret.key does not exist, but the database holds 1 provider key(s) sealed under an earlier instance secret.
+
+  加密用的实例密钥被写到了 `payload/data/instance-secret.key`，而**更新会整体替换 payload 目录**。每次升级，之前存下的密钥就再也打不开，只能重新输入。
+
+  运行时现在自己生成 `OPENMAIC_SECRET_KEY` 并存在数据库旁（`files/openmaic/instance-secret.key`，跟着备份走）。只在首次生成，之后复用——换掉它正是让已存密钥打不开的原因。
+
+### 下载
+
+[v1.0.0-m13 的 Release](https://github.com/0Sakura721/OpenMAIC-M/releases/tag/v1.0.0-m13)（221 MB，arm64-v8a）
+
+> 从 m12 升级后，m12 时期保存的密钥已无法恢复（加密它的密钥随旧 payload 一起被删了），需要重新输入一次。之后的升级不会再有这个问题。
+
+---
+
 ## [v1.0.0-m12] — 2026-11-01
 
 修复「保存并启用」必然失败的问题（m1 起就存在、一直没人走到的路径），并加入应用内更新检查。
