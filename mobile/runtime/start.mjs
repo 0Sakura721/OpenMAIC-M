@@ -29,7 +29,8 @@
  */
 import http from 'node:http';
 import path from 'node:path';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -52,6 +53,31 @@ async function resolveDataDir() {
     // Not running inside the Android app: no bridge module.
   }
   return path.join(projectDir, '.data');
+}
+
+/**
+ * The instance secret, kept in the data directory.
+ *
+ * Generated once and reused: the value seals every provider key, so replacing
+ * it silently makes what is stored unreadable. Written without the hard link
+ * the server's own implementation uses — Android refuses links in an app's
+ * private directory (that refusal is what made saving any key return 500).
+ */
+function readOrCreateInstanceSecret(dataDir) {
+  const file = path.join(dataDir, 'instance-secret.key');
+  try {
+    const existing = readFileSync(file, 'utf8').trim();
+    if (existing.length >= 32) return existing;
+  } catch {
+    // First launch: fall through and create one.
+  }
+  const secret = randomBytes(32).toString('base64');
+  mkdirSync(dataDir, { recursive: true });
+  const temporary = `${file}.${process.pid}.tmp`;
+  writeFileSync(temporary, `${secret}\n`, { mode: 0o600 });
+  renameSync(temporary, file);
+  log('created instance secret at', file);
+  return secret;
 }
 
 /**
@@ -139,6 +165,17 @@ async function main() {
   process.env.HOSTNAME = HOST;
 
   process.chdir(projectDir);
+
+  // Pin the instance secret before the server can create one.
+  //
+  // `instanceKey()` falls back to `<cwd>/data/instance-secret.key`, and `cwd`
+  // here is the unpacked payload — which an update replaces wholesale. A key
+  // sealed under the old secret then cannot be opened, and the user has to
+  // re-enter it, which is exactly what a log warning on the device showed
+  // after the last update. Setting OPENMAIC_SECRET_KEY skips that file
+  // entirely; the value lives beside the database, which backups already
+  // carry.
+  process.env.OPENMAIC_SECRET_KEY = readOrCreateInstanceSecret(dataDir);
 
   // --- 3. the Next.js server --------------------------------------------
   status('正在加载服务端…');
