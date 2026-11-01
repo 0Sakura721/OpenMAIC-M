@@ -101,7 +101,18 @@ function readOrCreateSecretFile(dataDir: string): string {
     try {
       fs.linkSync(temporary, file);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'EEXIST') return checkedSecret(fs.readFileSync(file, 'utf8'), file);
+      // Android's SELinux policy refuses hard links in an app's private
+      // directory (EACCES on `link`), which made every settings save fail with
+      // a 500 the moment a key had to be sealed. `rename` is atomic here too
+      // and publishes the same already-flushed content, so the "never visible
+      // half written" property is kept. It does not have link's exclusive
+      // semantics — a second instance starting at the same moment would replace
+      // the file instead of losing the race — so it is only the fallback, and
+      // the replacement is read back before it is trusted.
+      if (code !== 'EACCES' && code !== 'EPERM') throw error;
+      fs.renameSync(temporary, file);
       return checkedSecret(fs.readFileSync(file, 'utf8'), file);
     }
   } finally {
