@@ -76,6 +76,28 @@ const DROP_ROOT_DIRS = new Set([
 /** Extensions never needed at runtime. */
 const DROP_EXTENSIONS = new Set(['.map', '.tsbuildinfo', '.md']);
 
+/**
+ * Directories whose Markdown is *data*, not documentation.
+ *
+ * Course generation reads prompt templates off disk at request time —
+ * `lib/prompts/templates/<id>/system.md`, and the snippets they pull in via
+ * `lib/prompts/snippets/<id>.md` — so those files have to survive into the
+ * payload. Dropping every `.md` left them out, and a generation on the device
+ * failed with "Prompt template not found" while the same code worked in the web
+ * build. Next's own dependency trace lists them (329 `.md` files), which is the
+ * clearest statement that they are runtime assets.
+ *
+ * The check is on the path rather than a hard-coded list of files so a template
+ * added later is carried automatically.
+ */
+const MARKDOWN_IS_DATA = [/(^|\/)(templates|snippets)(\/|$)/];
+
+/** True when this path's `.md` files are runtime assets. */
+function keepsMarkdown(filePath) {
+  const normalised = filePath.split(path.sep).join('/');
+  return MARKDOWN_IS_DATA.some((pattern) => pattern.test(normalised));
+}
+
 /** Dangling symlinks met while copying; reported rather than failing the build. */
 const dangling = [];
 
@@ -156,7 +178,8 @@ async function copyTree(from, to, options = {}) {
   }
 
   if (!info.isDirectory()) {
-    if (DROP_EXTENSIONS.has(path.extname(from))) return;
+    const extension = path.extname(from);
+    if (DROP_EXTENSIONS.has(extension) && !(extension === '.md' && keepsMarkdown(from))) return;
     await mkdir(path.dirname(to), { recursive: true });
     await cp(from, to, { dereference: true });
     return;
@@ -331,6 +354,13 @@ async function main() {
     // slipped through once already — through a pnpm path shape the pruner did
     // not anticipate — so this is checked rather than assumed.
     await assertNoRealNativePackages(payload);
+
+    // The prompt templates have to be in the payload. They used to be dropped
+    // by the blanket `.md` rule, and the failure only showed up when a user
+    // pressed generate: "Prompt template not found", several screens away from
+    // anything a build log would point at. Checked here so the build stops
+    // instead.
+    await assertPromptTemplates(payload);
 
     // Node's package.json reader on this runtime fails above ~190 bytes (see
     // shrink-manifests.mjs). Every bare specifier would fail, so the manifests
@@ -638,6 +668,37 @@ async function assertNoRealNativePackages(payload) {
     );
   }
   console.log('[payload] verified: no real node-postgres or sharp anywhere in the payload');
+}
+
+/**
+ * Fail the build when the prompt templates are not in the payload.
+ *
+ * `loadPrompt` reads `templates/<id>/system.md` from disk and treats a missing
+ * file as "no prompt", so the symptom is a refused generation rather than a
+ * crash — quiet enough to ship and only find on a device.
+ */
+async function assertPromptTemplates(payload) {
+  const directories = [
+    path.join(payload, 'lib', 'prompts', 'templates'),
+    path.join(payload, 'node_modules', '@openmaic', 'generation', 'templates'),
+  ];
+
+  let found = 0;
+  for (const directory of directories) {
+    if (!(await exists(directory))) continue;
+    for (const entry of await readdir(directory)) {
+      if (await exists(path.join(directory, entry, 'system.md'))) found += 1;
+    }
+  }
+
+  if (found === 0) {
+    throw new Error(
+      'No prompt templates in the payload.\n' +
+        `Looked in:\n${directories.map((d) => `  ${path.relative(payload, d)}`).join('\n')}\n` +
+        'Generation would fail on the device with "Prompt template not found".',
+    );
+  }
+  console.log(`[payload] prompt templates: ${found} found`);
 }
 
 await main();
