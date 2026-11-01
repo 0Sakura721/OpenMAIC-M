@@ -628,12 +628,31 @@ public class MainActivity extends Activity {
         return handle;
     }
 
-    /** Restore where the user last parked the handle, if they moved it. */
+    /**
+     * Restore where the user last parked the handle, if they moved it.
+     *
+     * A remembered position wins over the default, with one exception: a spot
+     * that lands on the bottom composer is ignored. The default moved up from
+     * 96dp to 220dp precisely because that area is occupied on every page that
+     * matters, so a position saved against the old default — or one dragged
+     * there by accident — would reintroduce the problem the change fixes. The
+     * user can still drag it down deliberately after this launch; only the
+     * stale saved value is dropped.
+     */
     private void restoreHandlePosition(FrameLayout.LayoutParams params) {
         android.content.SharedPreferences prefs = getSharedPreferences("openmaic", MODE_PRIVATE);
         int left = prefs.getInt("handleLeft", -1);
         int top = prefs.getInt("handleTop", -1);
         if (left < 0 || top < 0) return;
+
+        int screenHeight = getResources().getDisplayMetrics().heightPixels;
+        int handleHeight = dp(44);
+        if (top + handleHeight > screenHeight - dp(200)) {
+            // Landed in the composer strip: forget it and keep the new default.
+            prefs.edit().remove("handleLeft").remove("handleTop").apply();
+            return;
+        }
+
         params.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
         params.leftMargin = left;
         params.topMargin = top;
