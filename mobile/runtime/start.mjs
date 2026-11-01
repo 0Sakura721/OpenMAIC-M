@@ -162,6 +162,35 @@ async function main() {
   status('正在监听端口…');
 
   const server = http.createServer((request, response) => {
+    // Every request is logged with its outcome and duration. Without this a
+    // failure the user sees in the page has no counterpart in logcat, and the
+    // only way to tell "the write never arrived" from "the write landed but the
+    // answer was lost" is guesswork. Writes are logged at INFO; the high-rate
+    // polling routes only when they fail or take over a second.
+    const startedAt = Date.now();
+    const isWrite = request.method !== 'GET' && request.method !== 'HEAD';
+    const verbose = isWrite || /\/api\/(model-config|stages|generate)/.test(request.url ?? '');
+
+    response.on('finish', () => {
+      const elapsed = Date.now() - startedAt;
+      if (verbose || elapsed > 1000 || response.statusCode >= 400) {
+        log(
+          `${request.method} ${request.url} -> ${response.statusCode} ` +
+            `${elapsed}ms${response.writableFinished ? '' : ' (aborted)'}`,
+        );
+      }
+    });
+    // A socket that dies mid-response is the failure mode the settings client
+    // reports as a lost answer, so it has to be visible.
+    response.on('close', () => {
+      if (!response.writableFinished) {
+        log(
+          `${request.method} ${request.url} ABORTED after ${Date.now() - startedAt}ms ` +
+            `(client went away)`,
+        );
+      }
+    });
+
     handle(request, response).catch((error) => {
       log('request failed:', request.url, error);
       if (!response.headersSent) response.statusCode = 500;
