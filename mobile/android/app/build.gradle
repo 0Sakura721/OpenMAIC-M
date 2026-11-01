@@ -44,8 +44,13 @@ android {
         applicationId 'ai.openmaic.mobile'
         minSdk 24
         targetSdk 36
-        versionCode 1
-        versionName '1.0.0'
+        // The build identifies itself so an update check can tell whether the
+        // release it is looking at is newer than what is installed. CI passes
+        // the tag (`v1.0.0-m11`) and a monotonic code; without them a local
+        // build reports the values below and the check simply never offers
+        // anything newer.
+        versionCode(providers.environmentVariable('OPENMAIC_VERSION_CODE').orNull?.toInteger() ?: 1)
+        versionName(providers.environmentVariable('OPENMAIC_VERSION_NAME').orNull ?: '1.0.0')
         ndk {
             // Each libnode.so is ~85 MB, so the default build carries one ABI.
             // `-PabiFilters=all` packages every one the runtime ships.

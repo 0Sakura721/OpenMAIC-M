@@ -167,6 +167,13 @@ jobs:
 
       - name: Build the release APK
         working-directory: mobile/android
+        env:
+          # The app compares its own version against the release tags when it
+          # checks for updates, so the tag has to be baked in. A tag without a
+          # milestone (a plain version) still gets a name; the code only has to
+          # be monotonic for Android's own upgrade rules.
+          OPENMAIC_VERSION_NAME: ${{ github.ref_name }}
+          OPENMAIC_VERSION_CODE: ${{ github.run_number }}
         run: ./gradlew --no-daemon assembleRelease -PabiFilters="$ABI"
 
       - name: Rename and verify the APK

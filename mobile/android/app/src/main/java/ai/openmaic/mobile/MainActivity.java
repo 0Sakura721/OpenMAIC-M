@@ -26,6 +26,8 @@ import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 
+import org.json.JSONObject;
+
 import java.io.File;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -471,6 +473,7 @@ public class MainActivity extends Activity {
             if (portAcceptsConnections()) {
                 serverWasReady = true;
                 runOnUiThread(() -> webView.loadUrl(START_URL));
+                maybeCheckForUpdatesOnLaunch();
                 return;
             }
             Thread.sleep(400);
@@ -478,10 +481,22 @@ public class MainActivity extends Activity {
         showFailure(new IllegalStateException("服务在 " + (BOOT_TIMEOUT_MS / 1000) + " 秒内没有启动"));
     }
 
+    /**
+     * Launch-time update check, when the user asked for one.
+     *
+     * Silent on failure and on "nothing newer": a check nobody asked to see
+     * should not interrupt a course. Only an actual newer build opens a
+     * dialog, and it opens once per launch.
+     */
+    private void maybeCheckForUpdatesOnLaunch() {
+        if (!DeviceSettings.readAutoCheckUpdates(this)) return;
+        String channel = DeviceSettings.readUpdateChannel(this);
+        checkForUpdates(channel, false);
+    }
+
     private boolean portAcceptsConnections() {
         try (java.net.Socket socket = new java.net.Socket()) {
-            socket.connect(new java.net.InetSocketAddress("127.0.0.1", SERVER_PORT), 500);
-            return true;
+            socket.connect(new java.net.InetSocketAddress("127.0.0.1", SERVER_PORT), 500);            return true;
         } catch (Exception notYet) {
             return false;
         }
@@ -678,32 +693,216 @@ public class MainActivity extends Activity {
         android.widget.LinearLayout panel = new android.widget.LinearLayout(this);
         panel.setOrientation(android.widget.LinearLayout.VERTICAL);
         int pad = dp(20);
-        panel.setPadding(pad, pad / 2, pad, 0);
+        panel.setPadding(pad, dp(8), pad, dp(8));
+
+        panel.addView(sectionLabel("本地服务"));
 
         android.widget.CheckBox allowLocal = new android.widget.CheckBox(this);
         allowLocal.setText("允许访问局域网模型服务");
         allowLocal.setChecked(DeviceSettings.readAllowLocalNetworks(this));
         panel.addView(allowLocal);
 
-        android.widget.TextView hint = new android.widget.TextView(this);
-        hint.setText("勾选后，模型服务商可以填写局域网地址（如 LM Studio、Ollama 的 http://192.168.x.x:端口）。\n\n修改在下次启动应用后生效。\n\n仅在你信任所在网络时开启。");
-        hint.setTextSize(13);
-        hint.setTextColor(Color.rgb(107, 114, 128));
-        hint.setPadding(0, dp(8), 0, dp(12));
-        panel.addView(hint);
+        panel.addView(
+                hint(
+                        "勾选后，模型服务商可以填写局域网地址（如 LM Studio、Ollama 的 http://192.168.x.x:端口）。\n\n修改在下次启动应用后生效。\n\n仅在你信任所在网络时开启。"));
 
+        panel.addView(sectionLabel("更新"));
+
+        android.widget.CheckBox autoCheck = new android.widget.CheckBox(this);
+        autoCheck.setText("每次启动检查更新");
+        autoCheck.setChecked(DeviceSettings.readAutoCheckUpdates(this));
+        panel.addView(autoCheck);
+
+        panel.addView(
+                hint(
+                        "开启后，启动时向 GitHub 查询是否有新版本；关闭时只在下面手动检查。\n\n"
+                                + "检查只读取公开发布信息，不需要账号，也不会发送任何使用数据。"));
+
+        android.widget.TextView channelLabel = new android.widget.TextView(this);
+        channelLabel.setText("接收哪个版本");
+        channelLabel.setTextSize(14);
+        channelLabel.setPadding(0, dp(12), 0, dp(6));
+        panel.addView(channelLabel);
+
+        android.widget.RadioGroup channels = new android.widget.RadioGroup(this);
+        channels.setOrientation(android.widget.RadioGroup.VERTICAL);
+
+        android.widget.RadioButton release = new android.widget.RadioButton(this);
+        release.setId(View.generateViewId());
+        release.setText("正式版（只提示正式发布）");
+        channels.addView(release);
+
+        android.widget.RadioButton preview = new android.widget.RadioButton(this);
+        preview.setId(View.generateViewId());
+        preview.setText("预览版（含预发布构建）");
+        channels.addView(preview);
+
+        boolean wantsPreview =
+                DeviceSettings.CHANNEL_PREVIEW.equals(DeviceSettings.readUpdateChannel(this));
+        if (wantsPreview) preview.setChecked(true);
+        else release.setChecked(true);
+        panel.addView(channels);
+
+        panel.addView(
+                hint(
+                        "目前所有已发布的构建都是预发布版，所以「正式版」暂时查不到任何更新——"
+                                + "它要等第一个正式版发布后才有内容。想跟进最新修复就选「预览版」。"));
+
+        android.widget.TextView current = new TextView(this);
+        current.setText("当前版本：" + UpdateChecker.installedVersion(this));
+        current.setTextSize(13);
+        current.setTextColor(Color.rgb(107, 114, 128));
+        current.setPadding(0, dp(12), 0, 0);
+        panel.addView(current);
+
+        android.widget.Button checkNow = new android.widget.Button(this);
+        checkNow.setText("立即检查更新");
+        checkNow.setAllCaps(false);
+        panel.addView(checkNow);
+
+        // The dialog body can exceed the screen once all of this is in it.
+        android.widget.ScrollView scroll = new android.widget.ScrollView(this);
+        scroll.addView(panel);
+
+        android.app.AlertDialog dialog =
+                new android.app.AlertDialog.Builder(this)
+                        .setTitle("应用设置")
+                        .setView(scroll)
+                        .setNegativeButton("取消", null)
+                        .setPositiveButton("保存", null)
+                        .create();
+
+        checkNow.setOnClickListener(
+                view -> {
+                    String channel =
+                            channels.getCheckedRadioButtonId() == preview.getId()
+                                    ? DeviceSettings.CHANNEL_PREVIEW
+                                    : DeviceSettings.CHANNEL_RELEASE;
+                    checkForUpdates(channel, true);
+                });
+
+        dialog.setOnShowListener(
+                ignored -> {
+                    // Set the listener after showing so validation can keep the
+                    // dialog open instead of dismissing on a failed save.
+                    dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE)
+                            .setOnClickListener(
+                                    view -> {
+                                        boolean localChecked = allowLocal.isChecked();
+                                        boolean autoChecked = autoCheck.isChecked();
+                                        String channel =
+                                                channels.getCheckedRadioButtonId() == preview.getId()
+                                                        ? DeviceSettings.CHANNEL_PREVIEW
+                                                        : DeviceSettings.CHANNEL_RELEASE;
+                                        if (localChecked == DeviceSettings.readAllowLocalNetworks(this)
+                                                && autoChecked == DeviceSettings.readAutoCheckUpdates(this)
+                                                && channel.equals(DeviceSettings.readUpdateChannel(this))) {
+                                            dialog.dismiss();
+                                            return;
+                                        }
+                                        try {
+                                            JSONObject changes = new JSONObject();
+                                            changes.put(DeviceSettings.KEY_ALLOW_LOCAL_NETWORKS, localChecked);
+                                            changes.put(DeviceSettings.KEY_AUTO_CHECK_UPDATES, autoChecked);
+                                            changes.put(DeviceSettings.KEY_UPDATE_CHANNEL, channel);
+                                            DeviceSettings.write(this, changes);
+                                            toast(
+                                                    localChecked
+                                                                    != DeviceSettings.readAllowLocalNetworks(this)
+                                                            ? "设置已保存"
+                                                            : "设置已保存，局域网开关下次启动生效");
+                                            dialog.dismiss();
+                                        } catch (Exception error) {
+                                            Log.e(TAG, "save settings failed", error);
+                                            toast("保存失败：" + error.getMessage());
+                                        }
+                                    });
+                });
+        dialog.show();
+    }
+
+    private android.widget.TextView sectionLabel(String text) {
+        android.widget.TextView label = new android.widget.TextView(this);
+        label.setText(text);
+        label.setTextSize(13);
+        label.setTextColor(Color.rgb(55, 65, 81));
+        label.setPadding(0, dp(16), 0, dp(4));
+        return label;
+    }
+
+    private android.widget.TextView hint(String text) {
+        android.widget.TextView view = new android.widget.TextView(this);
+        view.setText(text);
+        view.setTextSize(13);
+        view.setTextColor(Color.rgb(107, 114, 128));
+        view.setPadding(0, dp(6), 0, dp(4));
+        return view;
+    }
+
+    /**
+     * Ask GitHub for the newest build this channel accepts.
+     *
+     * @param manual true when the user pressed the button, which is when an
+     *               error or a "nothing newer" has to be reported; a launch-time
+     *               check stays silent unless it finds something.
+     */
+    private void checkForUpdates(String channel, boolean manual) {
+        if (manual) toast("正在检查更新…");
+        new Thread(
+                        () -> {
+                            UpdateChecker.Result result = UpdateChecker.check(this, channel);
+                            runOnUiThread(
+                                    () -> {
+                                        if (result.error != null) {
+                                            if (manual) {
+                                                new android.app.AlertDialog.Builder(this)
+                                                        .setTitle("检查更新失败")
+                                                        .setMessage(result.error)
+                                                        .setPositiveButton("知道了", null)
+                                                        .show();
+                                            }
+                                            return;
+                                        }
+                                        if (!result.available) {
+                                            if (manual) {
+                                                new android.app.AlertDialog.Builder(this)
+                                                        .setTitle("已是最新")
+                                                        .setMessage(
+                                                                "当前版本 "
+                                                                        + UpdateChecker.installedVersion(this)
+                                                                        + " 没有更新。\n\n"
+                                                                        + (DeviceSettings.CHANNEL_RELEASE.equals(channel)
+                                                                                ? "你选的是「正式版」通道；预发布构建不会在这里提示。"
+                                                                                : "预览通道也还没有更新的构建。"))
+                                                        .setPositiveButton("知道了", null)
+                                                        .show();
+                                            }
+                                            return;
+                                        }
+                                        showUpdateAvailable(result);
+                                    });
+                        },
+                        "openmaic-update")
+                .start();
+    }
+
+    private void showUpdateAvailable(UpdateChecker.Result result) {
+        String notes = result.notes == null ? "" : result.notes.trim();
+        if (notes.length() > 1200) notes = notes.substring(0, 1200) + "…";
         new android.app.AlertDialog.Builder(this)
-                .setTitle("应用设置")
-                .setView(panel)
-                .setNegativeButton("取消", null)
-                .setPositiveButton("保存", (dialog, which) -> {
-                    boolean checked = allowLocal.isChecked();
-                    if (checked == DeviceSettings.readAllowLocalNetworks(this)) return;
-                    runDataTask("正在保存…", () -> {
-                        DeviceSettings.writeAllowLocalNetworks(this, checked);
-                        return "设置已保存，下次启动生效";
-                    });
-                })
+                .setTitle("有新版本 " + result.version)
+                .setMessage(notes.isEmpty() ? "打开下载页获取新版本。" : notes)
+                .setNegativeButton("以后", null)
+                .setPositiveButton(
+                        "去下载",
+                        (dialog, which) -> {
+                            try {
+                                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(result.apkUrl)));
+                            } catch (Exception noBrowser) {
+                                Log.w(TAG, "cannot open download url", noBrowser);
+                                toast("没有可用的浏览器");
+                            }
+                        })
                 .show();
     }
 
