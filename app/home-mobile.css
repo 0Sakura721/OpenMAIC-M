@@ -653,6 +653,44 @@ html:has(.home-page[data-mobile='true']) .home-settings-dialog {
   translate: none;
   transform: none;
 }
+/*
+ * A settings dialog may never be wider than the viewport it is drawn in.
+ *
+ * The dialog is a fixed box centred with `left: 50%` and `-translate-x-1/2`,
+ * so any width over 100vw spills equally left and right and takes the
+ * navigation rail out of reach. `data-mobile` normally switches it to a
+ * full-screen layout, but that flag comes from `matchMedia('(max-width:
+ * 767px)')`, which has been observed to stay false inside an Android WebView
+ * on a phone with a raised display density — leaving the desktop box on a
+ * narrow screen.
+ *
+ * This rule does not ask the page whether it thinks it is a phone. It caps the
+ * box against the real viewport on every screen size, which is correct
+ * behaviour everywhere: on a wide screen the cap never binds (the dialog is
+ * narrower than the viewport already), and on a narrow one it turns the
+ * desktop overflow into a usable, fully visible panel.
+ */
+.home-settings-dialog[data-slot='dialog-content'] {
+  max-width: calc(100vw - 16px);
+  left: 50%;
+  translate: -50% -50%;
+  transform: none;
+  overflow-x: hidden;
+}
+
+/* On a genuinely narrow screen it becomes the full-screen sheet. */
+@media (max-width: 767px) {
+  .home-settings-dialog[data-slot='dialog-content'] {
+    top: 0;
+    left: var(--safe-area-left, 0px);
+    width: calc(100vw - var(--safe-area-left, 0px) - var(--safe-area-right, 0px));
+    max-width: none;
+    height: 100dvh;
+    max-height: 100dvh;
+    translate: none;
+    transform: none;
+  }
+}
 html:has(.home-page[data-mobile='true']) [data-slot='alert-dialog-content'] {
   left: calc(var(--home-dialog-left) + var(--home-dialog-width) / 2);
   width: min(calc(100vw - 32px), var(--home-dialog-width));
