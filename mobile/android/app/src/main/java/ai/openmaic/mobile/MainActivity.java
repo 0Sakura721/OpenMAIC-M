@@ -325,8 +325,16 @@ public class MainActivity extends Activity {
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setSupportZoom(false);
         settings.setBuiltInZoomControls(false);
-        settings.setLoadWithOverviewMode(true);
-        settings.setUseWideViewPort(true);
+        // Neither overview mode nor a wide viewport: both make WebView lay the
+        // page out at a nominal desktop width and then scale it down, so CSS
+        // media queries see a viewport far wider than the phone. The settings
+        // dialog is the visible casualty — it picks its `sm:` (≥640px) layout
+        // and renders as a half-width panel whose right side is off-screen,
+        // which is why the 模型服务 tab could not be reached. The page already
+        // declares `width=device-width, initial-scale=1`, so plain device-width
+        // layout is what it expects.
+        settings.setLoadWithOverviewMode(false);
+        settings.setUseWideViewPort(false);
         // Font/webfont and XHR traffic is same-origin over http://127.0.0.1;
         // mixed-content blocking would otherwise drop requests the page makes
         // to absolute http URLs, and the CSP already permits only 'self'.
