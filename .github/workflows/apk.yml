@@ -242,10 +242,19 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # The release body is the changelog entry for this tag. Every earlier
+          # release used one fixed sentence, so none of them said what changed;
+          # the extractor exits non-zero when a tag has no entry, which turns a
+          # forgotten changelog line into a failed release instead of another
+          # release that says nothing.
+          NOTES="$(mktemp)"
+          node mobile/scripts/release-notes.mjs "$GITHUB_REF_NAME" > "$NOTES"
+
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "$APK" --clobber
+            gh release edit "$GITHUB_REF_NAME" --notes-file "$NOTES"
           else
             gh release create "$GITHUB_REF_NAME" "$APK" \
               --title "$GITHUB_REF_NAME" \
-              --notes "OpenMAIC-M $GITHUB_REF_NAME — Android build with the embedded Node runtime and on-device PGlite database."
+              --notes-file "$NOTES"
           fi
