@@ -250,11 +250,17 @@ jobs:
           NOTES="$(mktemp)"
           node mobile/scripts/release-notes.mjs "$GITHUB_REF_NAME" > "$NOTES"
 
+          # Always a pre-release: these are milestone builds of a port still
+          # being made to work on real devices, not finished releases. GitHub
+          # only fills the "Latest" slot from non-prerelease releases, so this
+          # also keeps an experimental build from being presented as the
+          # recommended one.
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "$APK" --clobber
-            gh release edit "$GITHUB_REF_NAME" --notes-file "$NOTES"
+            gh release edit "$GITHUB_REF_NAME" --notes-file "$NOTES" --prerelease
           else
             gh release create "$GITHUB_REF_NAME" "$APK" \
               --title "$GITHUB_REF_NAME" \
-              --notes-file "$NOTES"
+              --notes-file "$NOTES" \
+              --prerelease
           fi
