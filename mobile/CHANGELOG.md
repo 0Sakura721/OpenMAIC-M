@@ -12,6 +12,41 @@ OpenMAIC 安卓版自己的变更记录。上游（[THU-MAIC/OpenMAIC](https://g
 
 ---
 
+## [v1.0.0-m14] — 2026-11-01
+
+把 m13 修的那两类问题**扫了一遍全仓库**——不是只修报出来的那两个地方。
+
+### 修复
+
+同一类缺陷：**运行时资源被当成文档丢掉**，以及**该长期存活的数据写进了会被替换的目录**。
+
+- **PBL（项目式学习）的 prompt 全被丢掉**。`lib/pbl/v2/prompts/*.md` 被 `.md` 规则清空。这个加载器**没有降级路径**——`readPromptFile` 直接 `readFileSync`，没有 try/catch，所以项目式课程会在设备上抛异常，而不是安静地失败。
+- **内置技能整个目录被丢掉**。`skills/` 在 `DROP_ROOT_DIRS` 里被整棵跳过。`skill-export.ts` 和 agent runtime 的 `skillsDir` 都读它，所以手机上的内置技能列表是空的。
+- **课程媒体、上传材料、用量记录都写进 payload**。这三处默认落在 `<cwd>/data`，而 cwd 是会被整体替换的 payload 目录——每次升级都会清空。现在分别由 `OPENMAIC_CLASSROOMS_DIR`、`OPENMAIC_MATERIALS_DIR`、`OPENMAIC_USAGE_DIR` 指向应用数据目录。
+
+### 顺带确认不是 bug 的几处
+
+- `assets/` 仍然丢弃：它只在生成的视频 HTML 里作为路径出现，而视频导出依赖 `child_process`，这个运行时没有。
+- `configs/` 仍然丢弃：是编进 bundle 的 TypeScript。
+- 服务端 YAML 配置缺失时降级为「未配置」，本地部署就该如此。
+- `/api/generate` 返回 404 是我调错了路径，根路由本来不存在。
+
+### 构建期断言
+
+装配脚本现在还会检查 PBL prompt 和技能集，缺一个就让构建失败。这轮实测：
+
+```
+[payload] prompt templates: 3 found
+[payload] PBL prompts: 7 found      ← 之前是 0
+[payload] skill sets: 2 found       ← 之前是 0
+```
+
+### 下载
+
+[v1.0.0-m14 的 Release](https://github.com/0Sakura721/OpenMAIC-M/releases/tag/v1.0.0-m14)（221 MB，arm64-v8a）
+
+---
+
 ## [v1.0.0-m13] — 2026-11-01
 
 修复生成课程必然失败、以及升级后已保存密钥全部失效。两者同源：**放在代码目录里、却必须长期存活的东西**，被当成了可以随意替换的。
