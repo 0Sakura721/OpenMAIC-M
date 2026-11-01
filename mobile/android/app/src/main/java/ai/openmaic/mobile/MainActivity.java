@@ -232,10 +232,15 @@ public class MainActivity extends Activity {
         // Bottom-start, not top-end: the page has its own toolbar in the top
         // corners (a menu button on the left, language and display controls on
         // the right), and a floating control parked there reads as part of that
-        // toolbar — which is exactly why this one went unnoticed. The bottom
-        // left corner is empty on the pages that matter.
+        // toolbar — which is exactly why this one went unnoticed.
+        //
+        // Lifted well clear of the bottom edge: every page that matters puts its
+        // composer there (the home screen's "输入学习主题" field, the chat input,
+        // a player's controls), and at 96dp the handle sat on top of that text.
+        // 220dp clears a one-line composer plus the navigation bar with room to
+        // spare, and the corner above it is empty on the pages checked.
         handleParams.gravity = android.view.Gravity.BOTTOM | android.view.Gravity.START;
-        handleParams.bottomMargin = dp(96);
+        handleParams.bottomMargin = dp(220);
         handleParams.leftMargin = dp(8);
         root.addView(settingsHandle, handleParams);
         restoreHandlePosition(handleParams);
