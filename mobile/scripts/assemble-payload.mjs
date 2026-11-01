@@ -62,7 +62,12 @@ const DROP_ROOT_DIRS = new Set([
   'configs',
   'scripts',
   'docs',
-  'skills',
+  // `skills/` is NOT dropped: `lib/server/skill-export.ts` reads it, and
+  // `lib/server/agent-runtime/config.ts` points the skill catalogue at it.
+  // Without it the built-in skill list is empty on the device.
+  // `assets/` stays dropped: it is only referenced as paths inside generated
+  // video HTML, and video export needs `child_process`, which this runtime does
+  // not have.
   // The repository's own `mobile/` tree: the Android project, the build
   // scripts and the runtime sources. Turbopack traces the whole directory into
   // standalone because `next.config.ts` mentions it, but the only part the
@@ -79,18 +84,29 @@ const DROP_EXTENSIONS = new Set(['.map', '.tsbuildinfo', '.md']);
 /**
  * Directories whose Markdown is *data*, not documentation.
  *
- * Course generation reads prompt templates off disk at request time —
- * `lib/prompts/templates/<id>/system.md`, and the snippets they pull in via
- * `lib/prompts/snippets/<id>.md` — so those files have to survive into the
- * payload. Dropping every `.md` left them out, and a generation on the device
- * failed with "Prompt template not found" while the same code worked in the web
- * build. Next's own dependency trace lists them (329 `.md` files), which is the
- * clearest statement that they are runtime assets.
+ * Three loaders read `.md` from disk at request time, each rooted at
+ * `process.cwd()`:
  *
- * The check is on the path rather than a hard-coded list of files so a template
- * added later is carried automatically.
+ *   - `lib/prompts/templates/<id>/system.md` and the `lib/prompts/snippets/`
+ *     they include — course generation;
+ *   - `lib/pbl/v2/prompts/<name>.md` — project-based learning, and this one has
+ *     no fallback: a missing file throws instead of degrading;
+ *   - `skills/<set>/**` — the installed skill catalogue, which is read whole
+ *     and zipped on download.
+ *
+ * Dropping every `.md` left all of them out. Generation failed with "Prompt
+ * template not found" and PBL would have thrown, while the same code worked in
+ * the web build. Next's own dependency trace lists 329 `.md` files, which is
+ * the clearest statement that they are runtime assets.
+ *
+ * The check is on the path rather than a list of files, so a template added
+ * later is carried automatically.
  */
-const MARKDOWN_IS_DATA = [/(^|\/)(templates|snippets)(\/|$)/];
+const MARKDOWN_IS_DATA = [
+  /(^|\/)(templates|snippets)(\/|$)/,
+  /(^|\/)lib\/pbl\/v2\/prompts(\/|$)/,
+  /(^|\/)skills(\/|$)/,
+];
 
 /** True when this path's `.md` files are runtime assets. */
 function keepsMarkdown(filePath) {
@@ -699,6 +715,32 @@ async function assertPromptTemplates(payload) {
     );
   }
   console.log(`[payload] prompt templates: ${found} found`);
+
+  // PBL prompts have no fallback at all: `readPromptFile` calls readFileSync
+  // without a try/catch, so a missing file throws where the user asked for a
+  // project lesson.
+  const pblDir = path.join(payload, 'lib', 'pbl', 'v2', 'prompts');
+  const pbl = (await exists(pblDir))
+    ? (await readdir(pblDir)).filter((name) => name.endsWith('.md')).length
+    : 0;
+  if (pbl === 0) {
+    throw new Error(
+      `No PBL prompts at ${path.relative(payload, pblDir)}.\n` +
+        'Project-based lessons would throw on the device.',
+    );
+  }
+  console.log(`[payload] PBL prompts: ${pbl} found`);
+
+  // The built-in skill catalogue. Missing it does not crash — the list is just
+  // empty — so it is checked rather than noticed later.
+  const skillsDir = path.join(payload, 'skills');
+  const skillSets = (await exists(skillsDir)) ? await readdir(skillsDir) : [];
+  if (skillSets.length === 0) {
+    throw new Error(
+      'No skills in the payload.\nSettings would show an empty built-in skill list.',
+    );
+  }
+  console.log(`[payload] skill sets: ${skillSets.length} found`);
 }
 
 await main();

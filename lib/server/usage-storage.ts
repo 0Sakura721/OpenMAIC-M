@@ -5,9 +5,19 @@ import { hasBillableTokens, type NormalizedUsage } from '@/lib/usage/normalize';
 
 const log = createLogger('UsageStorage');
 
-/** Base directory for usage logs; lands in the openmaic-data volume in Docker. */
+/**
+ * Base directory for usage logs.
+ *
+ * `<cwd>/data/usage` is the Docker volume. On a phone the working directory is
+ * the unpacked payload, which an update replaces, so the Android runtime points
+ * OPENMAIC_USAGE_DIR at its own data directory.
+ */
 function usageDir(baseDir?: string): string {
-  return baseDir ?? path.join(process.cwd(), 'data', 'usage');
+  if (baseDir) return baseDir;
+  const configured = process.env.OPENMAIC_USAGE_DIR?.trim();
+  return configured && configured.length > 0
+    ? configured
+    : path.join(process.cwd(), 'data', 'usage');
 }
 
 /** Current month's jsonl file name, e.g. usage/2026-06.jsonl. */

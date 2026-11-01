@@ -87,8 +87,21 @@ export class LocalMaterialByteStore implements MaterialByteStore {
 
 let sharedStore: MaterialByteStore | null = null;
 
+/**
+ * Where material bytes live by default.
+ *
+ * `<cwd>/data` is right for a container, where that directory is a mounted
+ * volume. On a phone the working directory is the unpacked payload, which an
+ * update replaces — every uploaded material would go with it. The Android
+ * runtime points this at its own data directory instead.
+ */
+function defaultMaterialRoot(): string {
+  const configured = process.env.OPENMAIC_MATERIALS_DIR?.trim();
+  return resolve(configured && configured.length > 0 ? configured : resolve(process.cwd(), 'data'));
+}
+
 export function getMaterialByteStore(): MaterialByteStore {
-  sharedStore ??= new LocalMaterialByteStore();
+  sharedStore ??= new LocalMaterialByteStore(defaultMaterialRoot());
   return sharedStore;
 }
 

@@ -177,6 +177,15 @@ async function main() {
   // carry.
   process.env.OPENMAIC_SECRET_KEY = readOrCreateInstanceSecret(dataDir);
 
+  // Everything else that writes to disk defaults to `<cwd>/data`, and cwd is
+  // the unpacked payload — replaced on every update. These point the writable
+  // stores at the app's data directory, which survives upgrades and is what the
+  // backup archive captures.
+  mkdirSync(dataDir, { recursive: true });
+  process.env.OPENMAIC_CLASSROOMS_DIR ??= path.join(dataDir, 'classrooms');
+  process.env.OPENMAIC_MATERIALS_DIR ??= path.join(dataDir, 'materials');
+  process.env.OPENMAIC_USAGE_DIR ??= path.join(dataDir, 'usage');
+
   // --- 3. the Next.js server --------------------------------------------
   status('正在加载服务端…');
   const required = JSON.parse(
