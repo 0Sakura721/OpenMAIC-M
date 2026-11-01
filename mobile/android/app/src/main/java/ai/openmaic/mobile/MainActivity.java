@@ -229,9 +229,14 @@ public class MainActivity extends Activity {
         settingsHandle.setVisibility(View.GONE);
         FrameLayout.LayoutParams handleParams = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        handleParams.gravity = android.view.Gravity.TOP | android.view.Gravity.END;
-        handleParams.topMargin = dp(8);
-        handleParams.rightMargin = dp(8);
+        // Bottom-start, not top-end: the page has its own toolbar in the top
+        // corners (a menu button on the left, language and display controls on
+        // the right), and a floating control parked there reads as part of that
+        // toolbar — which is exactly why this one went unnoticed. The bottom
+        // left corner is empty on the pages that matter.
+        handleParams.gravity = android.view.Gravity.BOTTOM | android.view.Gravity.START;
+        handleParams.bottomMargin = dp(96);
+        handleParams.leftMargin = dp(8);
         root.addView(settingsHandle, handleParams);
         restoreHandlePosition(handleParams);
 
@@ -548,16 +553,20 @@ public class MainActivity extends Activity {
     private View buildSettingsHandle() {
         TextView handle = new TextView(this);
         handle.setText("⚙");
-        handle.setTextSize(18);
-        handle.setTextColor(Color.rgb(55, 65, 81));
+        handle.setTextSize(20);
+        handle.setTextColor(Color.rgb(31, 41, 55));
         handle.setGravity(android.view.Gravity.CENTER);
         android.graphics.drawable.GradientDrawable background =
                 new android.graphics.drawable.GradientDrawable();
         background.setShape(android.graphics.drawable.GradientDrawable.OVAL);
-        background.setColor(Color.argb(230, 255, 255, 255));
-        background.setStroke(dp(1), Color.argb(60, 0, 0, 0));
+        background.setColor(Color.argb(242, 255, 255, 255));
+        // A stronger outline plus a drop shadow: the earlier version was a
+        // white circle at 55% opacity, which vanished against the page's own
+        // white toolbars.
+        background.setStroke(dp(2), Color.argb(90, 0, 0, 0));
         handle.setBackground(background);
-        handle.setAlpha(0.55f);
+        handle.setElevation(dp(4));
+        handle.setAlpha(0.9f);
         handle.setContentDescription("应用设置");
         int size = dp(44);
         handle.setWidth(size);
@@ -600,7 +609,7 @@ public class MainActivity extends Activity {
                     }
                     case android.view.MotionEvent.ACTION_UP:
                     case android.view.MotionEvent.ACTION_CANCEL:
-                        view.setAlpha(0.55f);
+                        view.setAlpha(0.9f);
                         if (dragging) {
                             rememberHandlePosition(params.leftMargin, params.topMargin);
                             return true;
