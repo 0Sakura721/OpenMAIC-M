@@ -112,6 +112,13 @@ function readOrCreateSecretFile(dataDir: string): string {
       // the file instead of losing the race — so it is only the fallback, and
       // the replacement is read back before it is trusted.
       if (code !== 'EACCES' && code !== 'EPERM') throw error;
+      // rename replaces an existing file, so check first: overwriting a secret
+      // that another writer already published would make the keys sealed under
+      // it unreadable. The check is racy in principle, which is why link is
+      // still tried first; on a phone only one process ever writes this.
+      if (fs.existsSync(file)) {
+        return checkedSecret(fs.readFileSync(file, 'utf8'), file);
+      }
       fs.renameSync(temporary, file);
       return checkedSecret(fs.readFileSync(file, 'utf8'), file);
     }
