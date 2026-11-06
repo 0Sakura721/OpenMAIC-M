@@ -321,6 +321,7 @@ async function main() {
     // Copied explicitly from here, by resolving each declared dependency, so the
     // result does not depend on what the tracer decided.
     const workspaceCopied = [];
+    const workspaceDetail = [];
     const workspaceRepaired = [];
     const rootPkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
     for (const dependency of Object.keys(rootPkg.dependencies ?? {})) {
@@ -344,6 +345,7 @@ async function main() {
       // Nothing is overwritten: the payload's copy of a file the tracer already
       // produced is the one the build intended to ship.
       const shippedEntries = await shippedTopLevelEntries(source);
+      workspaceDetail.push(`${dependency}: ${[...shippedEntries].join('|')}`);
       const skipReplaced = (from) => {
         const relative = path.relative(payload, from).split(path.sep).join('/');
         if (/(^|\/)node_modules\/(sharp|pg)$/.test(relative)) return true;
@@ -369,6 +371,7 @@ async function main() {
     if (workspaceCopied.length > 0) {
       console.log(`[payload] added workspace packages: ${workspaceCopied.join(', ')}`);
     }
+    for (const line of workspaceDetail) console.log(`[payload]   ${line}`);
 
     // ---- PGlite, which is not part of the Next bundle ----
     // Resolved through the package's own entry point rather than
