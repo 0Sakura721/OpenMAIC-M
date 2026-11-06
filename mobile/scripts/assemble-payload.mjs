@@ -332,55 +332,42 @@ async function main() {
       } catch {
         continue;
       }
-      // `package.json` being there is not enough. The traced copy can arrive
-      // with only the files Next imported — `dist/`, but not the `templates/`
-      // directory that is read from disk at runtime — and a presence check on
-      // the manifest then skips the copy that would have filled it in. That is
-      // exactly how @openmaic/generation reached the device without its
-      // prompts.
-      const relativeFromPayload = (source) =>
-        path.relative(payload, source).split(path.sep).join('/');
-
-      // The workspace copy runs after the pruning rules above, so it has to
-      // apply them too: `@openmaic/storage` carries its own `node_modules/pg`
-      // (the real driver, declared as a dependency), and copying it back in
-      // reintroduces exactly the package this build replaces. `dereference`
-      // turns pnpm's symlink into a real directory, so the path shape is the
-      // only thing left to match on.
+      // Copy only what the package says it ships.
+      //
+      // The whole directory used to be copied, which also copied the package's
+      // own `node_modules` — pnpm links a workspace package's dependencies
+      // there, `@openmaic/storage` pulls the AWS SDK that way, and
+      // `dereference` expands every one of those links into a full copy. That
+      // is how the APK went from 221 MB to 400 MB in one commit. `src`, the
+      // tests and the docs are equally unnecessary on a phone.
+      //
+      // Nothing is overwritten: the payload's copy of a file the tracer already
+      // produced is the one the build intended to ship.
+      const shippedEntries = await shippedTopLevelEntries(source);
       const skipReplaced = (from) => {
-        const relative = relativeFromPayload(from);
+        const relative = path.relative(payload, from).split(path.sep).join('/');
         if (/(^|\/)node_modules\/(sharp|pg)$/.test(relative)) return true;
         if (/(^|\/)node_modules\/@img(\/|$)/.test(relative)) return true;
         return false;
       };
-
-      const manifest = path.join(target, 'package.json');
-      if (!(await exists(manifest))) {
-        await copyTree(source, target, { skip: skipReplaced });
-        workspaceCopied.push(dependency);
-        continue;
-      }
-      // Fill in whatever the traced copy left out, without overwriting it.
-      const missing = await missingRuntimeDirs(source, target);
-      if (missing.length === 0) continue;
-      // `skip` is consulted synchronously by copyTree, so this cannot await.
-      const keepManifest = existsSync(manifest);
       await copyTree(source, target, {
         skip: (from) => {
-          // `package.json` is already correct in the payload (the shrinker may
-          // even have rewritten it), so it is the one file left alone.
           const relative = path.relative(source, from).split(path.sep).join('/');
-          if (relative === 'package.json' && keepManifest) return true;
-          return skipReplaced(from);
+          if (relative === 'node_modules' || relative.startsWith('node_modules/')) return true;
+          if (skipReplaced(from)) return true;
+          const top = relative.split('/')[0];
+          if (!shippedEntries.has(top)) return true;
+          // Leave anything the tracer already put there alone, except the
+          // directories its copy is known to omit — those are filled in.
+          const existing = path.join(target, relative);
+          if (existsSync(existing) && !missingDirs.has(top)) return true;
+          return false;
         },
       });
-      workspaceRepaired.push(`${dependency} (${missing.join(', ')})`);
+      workspaceCopied.push(dependency);
     }
     if (workspaceCopied.length > 0) {
       console.log(`[payload] added workspace packages: ${workspaceCopied.join(', ')}`);
-    }
-    if (workspaceRepaired.length > 0) {
-      console.log(`[payload] completed partial workspace packages: ${workspaceRepaired.join(', ')}`);
     }
 
     // ---- PGlite, which is not part of the Next bundle ----
@@ -531,6 +518,42 @@ async function missingRuntimeDirs(source, target) {
   }
   return missing;
 }
+
+/**
+ * Top-level entries a package ships, from its own `files` list.
+ *
+ * Always includes `package.json` and anything the package's entry points name,
+ * plus `dist` when the manifest points into it — a package whose `files` is
+ * missing or empty still has to keep whatever its `main` resolves to.
+ */
+async function shippedTopLevelEntries(packageDir) {
+  const entries = new Set(['package.json']);
+  let manifest = null;
+  try {
+    manifest = JSON.parse(readFileSync(path.join(packageDir, 'package.json'), 'utf8'));
+  } catch {
+    return entries;
+  }
+  for (const entry of manifest.files ?? []) {
+    const top = String(entry).split('/')[0];
+    if (top && !top.includes('.')) entries.add(top);
+  }
+  // `main`/`types` point into a directory that has to exist even when `files`
+  // forgot to list it.
+  for (const field of ['main', 'module', 'types']) {
+    const value = manifest[field];
+    if (typeof value !== 'string') continue;
+    const top = value.replace(/^\.\//, '').split('/')[0];
+    if (top && !top.includes('.')) entries.add(top);
+  }
+  return entries;
+}
+
+/**
+ * Directories the traced copy is known to omit although the code reads them at
+ * runtime. They are filled in even when the target already has the package.
+ */
+const missingDirs = new Set(['templates', 'snippets', 'prompts-pbl']);
 
 function resolvePackageDir(specifier) {
   // Workspace packages first. `require.resolve` cannot be relied on for them:
