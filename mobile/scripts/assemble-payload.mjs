@@ -367,6 +367,12 @@ async function main() {
         },
       });
       workspaceCopied.push(dependency);
+      workspaceDetail.push(
+        `after copy ${dependency}: ${(await readdir(target)).join('|')}` +
+          (await exists(path.join(target, 'templates'))
+            ? ` | templates: ${(await readdir(path.join(target, 'templates'))).join(',')}`
+            : ' | no templates'),
+      );
     }
     if (workspaceCopied.length > 0) {
       console.log(`[payload] added workspace packages: ${workspaceCopied.join(', ')}`);
@@ -874,7 +880,14 @@ async function assertPromptTemplates(payload) {
     const entries = await readdir(check.directory);
     for (const name of check.required) {
       if (!(await exists(path.join(check.directory, name, 'system.md')))) {
-        problems.push(`${check.label}: ${name}/system.md missing`);
+        // Say what is actually there: "missing" alone sent me looking at the
+        // copy rules twice when the answer was the contents.
+        const inner = await exists(path.join(check.directory, name))
+          ? `(present but empty: ${(await readdir(path.join(check.directory, name))).slice(0, 5).join(', ') || 'nothing'})`
+          : '';
+        problems.push(
+          `${check.label}: ${name}/system.md missing ${inner} [have: ${entries.slice(0, 6).join(', ')}]`,
+        );
       }
     }
     console.log(`[payload] ${check.label}: ${entries.length} entries`);
