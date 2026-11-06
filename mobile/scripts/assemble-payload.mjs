@@ -324,8 +324,9 @@ async function main() {
     const workspaceDetail = [];
     const workspaceRepaired = [];
     const rootPkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
-    for (const dependency of Object.keys(rootPkg.dependencies ?? {})) {
-      if (!dependency.startsWith('@openmaic/')) continue;
+    const workspaceNames = Object.keys(rootPkg.dependencies ?? {}).filter((n) => n.startsWith('@openmaic/'));
+    console.log(`[payload] workspace packages declared: ${workspaceNames.join(', ') || '(none)'}`);
+    for (const dependency of workspaceNames) {
       const target = path.join(payload, 'node_modules', ...dependency.split('/'));
       let source;
       try {
