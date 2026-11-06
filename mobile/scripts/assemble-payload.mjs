@@ -693,28 +693,61 @@ async function assertNoRealNativePackages(payload) {
  * file as "no prompt", so the symptom is a refused generation rather than a
  * crash — quiet enough to ship and only find on a device.
  */
+/**
+ * Fail the build when the prompt templates are not in the payload.
+ *
+ * There are two independent template trees and they serve different callers:
+ *
+ *   - `lib/prompts/templates` — `@/lib/prompts`, used by the course *steps*
+ *     (`lib/server/generation/steps/outline.ts`), which picks between
+ *     `interactive-outlines` and `task-engine-outlines`;
+ *   - `node_modules/@openmaic/generation/templates` — the package's own
+ *     `outline-generator.ts`, which asks for `requirements-to-outlines`. That
+ *     package is `serverExternalPackages`, so it only works if the real
+ *     directory is present.
+ *
+ * Summing the two was a mistake worth recording: the first version of this
+ * check counted 3 from `lib/prompts` and passed while the package tree was
+ * absent entirely, which is precisely the failure it exists to prevent. Each
+ * tree is now checked on its own, and `requirements-to-outlines` in particular,
+ * because that is the id the device actually asked for.
+ */
 async function assertPromptTemplates(payload) {
-  const directories = [
-    path.join(payload, 'lib', 'prompts', 'templates'),
-    path.join(payload, 'node_modules', '@openmaic', 'generation', 'templates'),
+  const checks = [
+    {
+      label: 'lib/prompts templates',
+      directory: path.join(payload, 'lib', 'prompts', 'templates'),
+      required: ['interactive-outlines', 'task-engine-outlines'],
+    },
+    {
+      label: '@openmaic/generation templates',
+      directory: path.join(payload, 'node_modules', '@openmaic', 'generation', 'templates'),
+      required: ['requirements-to-outlines'],
+    },
   ];
 
-  let found = 0;
-  for (const directory of directories) {
-    if (!(await exists(directory))) continue;
-    for (const entry of await readdir(directory)) {
-      if (await exists(path.join(directory, entry, 'system.md'))) found += 1;
+  const problems = [];
+  for (const check of checks) {
+    if (!(await exists(check.directory))) {
+      problems.push(`${check.label}: directory missing (${path.relative(payload, check.directory)})`);
+      continue;
     }
+    const entries = await readdir(check.directory);
+    for (const name of check.required) {
+      if (!(await exists(path.join(check.directory, name, 'system.md')))) {
+        problems.push(`${check.label}: ${name}/system.md missing`);
+      }
+    }
+    console.log(`[payload] ${check.label}: ${entries.length} entries`);
   }
 
-  if (found === 0) {
+  if (problems.length > 0) {
     throw new Error(
-      'No prompt templates in the payload.\n' +
-        `Looked in:\n${directories.map((d) => `  ${path.relative(payload, d)}`).join('\n')}\n` +
+      `Prompt templates are incomplete:\n${problems.map((p) => `  ${p}`).join('\n')}\n` +
         'Generation would fail on the device with "Prompt template not found".',
     );
   }
-  console.log(`[payload] prompt templates: ${found} found`);
+}
 
   // PBL prompts have no fallback at all: `readPromptFile` calls readFileSync
   // without a try/catch, so a missing file throws where the user asked for a
