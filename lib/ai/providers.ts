@@ -2240,7 +2240,22 @@ async function fetchCustomOpenAIChat(
 /** A request's headers without an `Authorization` that carries no credential (`Bearer `). */
 export function withoutEmptyBearer(init: RequestInit | undefined): RequestInit | undefined {
   if (!init?.headers) return init;
-  const headers = new Headers(init.headers);
+  let headers: Headers;
+  try {
+    headers = new Headers(init.headers);
+  } catch (error) {
+    // A header value with a character above U+00FF cannot be converted to a
+    // ByteString, and this is where it surfaces: `new Headers(...)` throws
+    // before any request is made. A key stored before the save-time check
+    // existed can still be in the database, and the raw error names a character
+    // index without saying it is the API key.
+    if (error instanceof TypeError) {
+      throw new Error(
+        'API key 含有中文或其他非 ASCII 字符，无法放进请求头。请在「模型服务」里重新填写该密钥。',
+      );
+    }
+    throw error;
+  }
   let empty = false;
   headers.forEach((value, name) => {
     if (name === 'authorization' && /^bearer\s*$/i.test(value)) empty = true;

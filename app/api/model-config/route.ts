@@ -53,6 +53,28 @@ const id = z.string().min(1).max(128);
 /** An assignment's own shape is checked with the whole configuration it lands in. */
 const assignment = z.union([z.string().min(1), z.null(), z.record(z.string(), z.unknown())]);
 
+/**
+ * A secret that can be put in an `Authorization` header.
+ *
+ * API keys end up in `Headers.set('authorization', `Bearer ${key}`)`, and that
+ * conversion throws "Cannot convert argument to a ByteString" for any character
+ * above U+00FF. A key pasted with a stray Chinese character therefore saved
+ * cleanly and then failed on the first model call with an error that names a
+ * character index and nothing else — the user has no way to connect that to the
+ * key they typed. Checked here instead, where the message can say what is wrong.
+ *
+ * Leading and trailing whitespace is trimmed rather than refused: pasting a key
+ * with a trailing newline is common and harmless.
+ */
+const headerSafeSecret = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((value) => !/[\u0100-\uFFFF]/.test(value), {
+    message:
+      'API key 含有中文或其他非 ASCII 字符。请重新复制密钥——复制时常会带上说明文字或标点。',
+  });
+
 const bodySchema = z
   .object({
     revision: z.number().int().nonnegative().nullable(),
@@ -69,7 +91,7 @@ const bodySchema = z
           kind: z.literal('provider'),
           id,
           preset: id,
-          apiKey: z.string().optional(),
+          apiKey: headerSafeSecret.optional(),
           baseUrl: z.string().min(1).nullable().optional(),
           models: z.array(z.string().min(1)).nullable().optional(),
         })
