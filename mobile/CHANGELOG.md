@@ -12,6 +12,49 @@ OpenMAIC 安卓版自己的变更记录。上游（[THU-MAIC/OpenMAIC](https://g
 
 ---
 
+## [v1.0.0-m18] — 2026-11-06
+
+**同步上游到 v1.4.1。** 上游 49 个提交合入，无冲突。
+
+### 上游带来的
+
+- **PBL v3 的一批修复**：学习报告显示项目成果、教学工具负载瘦身、里程碑选择在预览中可见、测验选项表述、Tests/Quiz 滚动跟随、Java 应用预览、课程删除后回收沙箱、教学反馈与 IDE 读取错误恢复。
+- **课程级撤销时间线**：手动编辑和 agent 编辑都可回溯。
+- **共享沙箱**：任何已准入的 owner 都能使用。
+- **未编目模型的 thinking 开关**：不再依赖模型目录里的固定字段。
+
+### 合并检查
+
+| 项目 | 结果 |
+|---|---|
+| 冲突 | 无 |
+| `tsc --noEmit` | 0 错误 |
+| `next.config.ts`（`serverExternalPackages`） | 上游未改动 |
+| workspace 包 | 结构未变，仍是 7 个 |
+| 我们的 6 处移动端修补 | 全部保留 |
+
+上游新增了一个构建步骤 `prepare-code-editor.mjs`，把 Monaco 编辑器复制到 `public/code-editor/vs`。CI 用的 `pnpm build` 已包含它，`public/` 也完整进 payload，无需额外处理——这是 APK 从 224 MB 涨到 240 MB 的原因之一。
+
+### 构建验证
+
+上一轮修好的模板问题在合并后依然正常：
+
+```
+[payload] @openmaic/generation templates: 13 entries
+[payload] PBL prompts: 7 found
+[payload] skill sets: 2 found
+[verify-runtime] PASS
+manifest assertions passed
+```
+
+### 下载
+
+[v1.0.0-m18 的 Release](https://github.com/0Sakura721/OpenMAIC-M/releases/tag/v1.0.0-m18)（240 MB，arm64-v8a）
+
+> 上游 PBL v3 改动较大，这一版的启动与建课已在 CI 验证，但完整的项目式学习流程还没有在真机上跑过。用到该功能时请留意。
+
+---
+
 ## [v1.0.0-m17] — 2026-11-06
 
 **`Prompt template not found` 这次真的修好了。** m16 的 APK 是 400 MB 且仍然缺模板，这一版 225 MB 且模板齐全。
