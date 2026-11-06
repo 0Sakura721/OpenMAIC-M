@@ -321,22 +321,47 @@ async function main() {
     // Copied explicitly from here, by resolving each declared dependency, so the
     // result does not depend on what the tracer decided.
     const workspaceCopied = [];
+    const workspaceRepaired = [];
     const rootPkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
     for (const dependency of Object.keys(rootPkg.dependencies ?? {})) {
       if (!dependency.startsWith('@openmaic/')) continue;
       const target = path.join(payload, 'node_modules', ...dependency.split('/'));
-      if (await exists(path.join(target, 'package.json'))) continue;
       let source;
       try {
         source = resolvePackageDir(dependency);
       } catch {
         continue;
       }
-      await copyTree(source, target);
-      workspaceCopied.push(dependency);
+      // `package.json` being there is not enough. The traced copy can arrive
+      // with only the files Next imported — `dist/`, but not the `templates/`
+      // directory that is read from disk at runtime — and a presence check on
+      // the manifest then skips the copy that would have filled it in. That is
+      // exactly how @openmaic/generation reached the device without its
+      // prompts.
+      const manifest = path.join(target, 'package.json');
+      if (!(await exists(manifest))) {
+        await copyTree(source, target);
+        workspaceCopied.push(dependency);
+        continue;
+      }
+      // Fill in whatever the traced copy left out, without overwriting it.
+      const missing = await missingRuntimeDirs(source, target);
+      if (missing.length === 0) continue;
+      // `skip` is consulted synchronously by copyTree, so this cannot await.
+      const keepManifest = existsSync(manifest);
+      await copyTree(source, target, {
+        skip: (from) => {
+          const relative = path.relative(source, from).split(path.sep).join('/');
+          return relative === 'package.json' && keepManifest;
+        },
+      });
+      workspaceRepaired.push(`${dependency} (${missing.join(', ')})`);
     }
     if (workspaceCopied.length > 0) {
       console.log(`[payload] added workspace packages: ${workspaceCopied.join(', ')}`);
+    }
+    if (workspaceRepaired.length > 0) {
+      console.log(`[payload] completed partial workspace packages: ${workspaceRepaired.join(', ')}`);
     }
 
     // ---- PGlite, which is not part of the Next bundle ----
@@ -458,6 +483,36 @@ async function main() {
  * are installed — which is exactly how `@swc/helpers` went missing from the
  * payload while being a hard Next runtime dependency.
  */
+/**
+ * Runtime data directories a package declares but the payload copy lacks.
+ *
+ * `files` in the manifest is the publisher's own statement of what has to ship,
+ * and for these packages it names `templates`, `snippets` and the like — the
+ * directories the code reads at runtime rather than imports. Comparing that
+ * against the copy is the check that would have caught the missing prompts
+ * before a device did.
+ */
+async function missingRuntimeDirs(source, target) {
+  const manifestPath = path.join(source, 'package.json');
+  if (!(await exists(manifestPath))) return [];
+  let files;
+  try {
+    files = JSON.parse(readFileSync(manifestPath, 'utf8')).files ?? [];
+  } catch {
+    return [];
+  }
+  const missing = [];
+  for (const entry of files) {
+    // Only directories with no extension: a manifest entry like `dist/index.js`
+    // is not a directory to compare, and `README.md` is documentation.
+    if (entry.includes('.') && !entry.startsWith('.')) continue;
+    if (!(await exists(path.join(source, entry)))) continue;
+    if (await exists(path.join(target, entry))) continue;
+    missing.push(entry);
+  }
+  return missing;
+}
+
 function resolvePackageDir(specifier) {
   const fromRoot = createRequire(path.join(root, 'package.json'));
   try {
