@@ -310,6 +310,35 @@ async function main() {
     }
     if (copied.length > 0) console.log(`[payload] added Next runtime deps: ${copied.join(', ')}`);
 
+    // `@openmaic/*` are workspace packages, linked into node_modules by pnpm as
+    // symlinks to `packages/`. `copyTree` dereferences, so they should arrive
+    // with the rest of node_modules — but the tracer treats them as part of the
+    // project rather than as dependencies, and the copy can leave a link whose
+    // target the payload does not have. The consequence is not subtle: the
+    // generation package carries its own `templates/`, and without it every
+    // course generation fails with "Prompt template not found".
+    //
+    // Copied explicitly from here, by resolving each declared dependency, so the
+    // result does not depend on what the tracer decided.
+    const workspaceCopied = [];
+    const rootPkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
+    for (const dependency of Object.keys(rootPkg.dependencies ?? {})) {
+      if (!dependency.startsWith('@openmaic/')) continue;
+      const target = path.join(payload, 'node_modules', ...dependency.split('/'));
+      if (await exists(path.join(target, 'package.json'))) continue;
+      let source;
+      try {
+        source = resolvePackageDir(dependency);
+      } catch {
+        continue;
+      }
+      await copyTree(source, target);
+      workspaceCopied.push(dependency);
+    }
+    if (workspaceCopied.length > 0) {
+      console.log(`[payload] added workspace packages: ${workspaceCopied.join(', ')}`);
+    }
+
     // ---- PGlite, which is not part of the Next bundle ----
     // Resolved through the package's own entry point rather than
     // `<pkg>/package.json`: its `exports` map does not publish the manifest, so
