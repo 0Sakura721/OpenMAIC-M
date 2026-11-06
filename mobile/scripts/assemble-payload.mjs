@@ -351,6 +351,8 @@ async function main() {
       const keepManifest = existsSync(manifest);
       await copyTree(source, target, {
         skip: (from) => {
+          // `package.json` is already correct in the payload (the shrinker may
+          // even have rewritten it), so it is the one file left alone.
           const relative = path.relative(source, from).split(path.sep).join('/');
           return relative === 'package.json' && keepManifest;
         },
@@ -514,6 +516,16 @@ async function missingRuntimeDirs(source, target) {
 }
 
 function resolvePackageDir(specifier) {
+  // Workspace packages first. `require.resolve` cannot be relied on for them:
+  // `@openmaic/generation` declares no root `exports`, so resolving it throws
+  // ERR_PACKAGE_PATH_NOT_EXPORTED, and the store lookup below cannot find a
+  // workspace package because pnpm never puts one there. The repository layout
+  // is the answer: `node_modules/@scope/name` is a symlink to `packages/…`.
+  if (specifier.startsWith('@openmaic/')) {
+    const linked = path.join(root, 'node_modules', ...specifier.split('/'));
+    if (existsSync(path.join(linked, 'package.json'))) return linked;
+  }
+
   const fromRoot = createRequire(path.join(root, 'package.json'));
   try {
     let resolved;
