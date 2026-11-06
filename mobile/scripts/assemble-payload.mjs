@@ -579,10 +579,11 @@ function resolvePackageDir(specifier) {
   // and the `packages/` directory are tried, since which one exists depends on
   // how the install was done.
   if (specifier.startsWith('@openmaic/')) {
-    const [, scope, name] = specifier.split('/');
+    // `@openmaic/dsl`.split('/') is ['@openmaic', 'dsl'] — a two-element array,
+    // so the scope is the first element rather than a separate package segment.
     const candidates = [
-      path.join(root, 'node_modules', scope, name),
-      path.join(root, 'packages', specifier),
+      path.join(root, 'node_modules', ...specifier.split('/')),
+      path.join(root, 'packages', ...specifier.split('/')),
     ];
     for (const candidate of candidates) {
       if (existsSync(path.join(candidate, 'package.json'))) return candidate;
