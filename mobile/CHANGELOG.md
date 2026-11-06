@@ -12,6 +12,48 @@ OpenMAIC 安卓版自己的变更记录。上游（[THU-MAIC/OpenMAIC](https://g
 
 ---
 
+## [v1.0.0-m16] — 2026-11-06
+
+**真正修好 `Prompt template not found`。** m13 和 m14 都以为修了，其实都在修错的地方。
+
+### m13/m14 错在哪
+
+我检查的是 `lib/prompts/templates`，那里有 3 个模板。但报错的 `requirements-to-outlines` **不在那里**——它属于 `@openmaic/generation` 包自己的 `templates/` 目录，由包内的 `outline-generator.ts` 读取。
+
+更糟的是断言写法：把两个目录的数量**相加**，于是 `lib/prompts` 的 3 个让检查通过了，而包的模板目录根本不存在。断言本身在掩盖问题。
+
+### 真正的三个原因
+
+1. **`@openmaic/generation` 没有进 payload**。7 个 workspace 包（`dsl`/`editor`/`generation`/`importer`/`renderer`/`storage`/`geometry`）都是 pnpm 符号链接指向 `packages/`，Next 的 tracer 把它们当项目代码而非依赖，是否随拷贝保留取决于它的判断。
+
+2. **`resolvePackageDir` 解析不了它们**。`@openmaic/generation` 没有根 `exports`，`require.resolve` 抛 `ERR_PACKAGE_PATH_NOT_EXPORTED`；pnpm store 里也找不到 workspace 包。所以复制循环每次都静默跳过——上一版日志里只有 `@openmaic/importer` 一个成功。
+
+3. **tracer 的副本是残缺的**。`@openmaic/generation` 带着 `dist/` 进来，却缺 `templates/`；而存在性检查只看 `package.json`，于是判定「已存在」，补全的复制从不发生。
+
+### 修复
+
+- 按仓库布局直接解析 workspace 包（`node_modules/@scope/name` → `packages/…`），不依赖 `require.resolve`。
+- 用包自己 `files` 字段里声明的目录逐一比对副本，缺什么补什么，只跳过 `package.json`。
+- workspace 复制同样套用 `pg`/`sharp` 替换规则——否则会把 `@openmaic/storage/node_modules/pg` 这个真驱动又带回来。
+- **断言改成逐目录、按必需模板名检查**，不再相加。
+
+### 构建实测
+
+```
+[payload] added workspace packages: dsl, editor, generation, importer, renderer, storage, geometry
+[payload] @openmaic/generation templates: 13 entries   ← 之前整个目录不存在
+[payload] lib/prompts templates: 3 entries
+[payload] PBL prompts: 7 found
+[payload] skill sets: 2 found
+[payload] verified: no real node-postgres or sharp anywhere in the payload
+```
+
+### 下载
+
+[v1.0.0-m16 的 Release](https://github.com/0Sakura721/OpenMAIC-M/releases/tag/v1.0.0-m16)（221 MB，arm64-v8a）
+
+---
+
 ## [v1.0.0-m15] — 2026-11-06
 
 ### 修复
