@@ -747,7 +747,6 @@ async function assertPromptTemplates(payload) {
         'Generation would fail on the device with "Prompt template not found".',
     );
   }
-}
 
   // PBL prompts have no fallback at all: `readPromptFile` calls readFileSync
   // without a try/catch, so a missing file throws where the user asked for a
