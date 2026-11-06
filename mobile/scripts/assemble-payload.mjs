@@ -331,7 +331,11 @@ async function main() {
       let source;
       try {
         source = resolvePackageDir(dependency);
-      } catch {
+      } catch (error) {
+        // Never silent: a workspace package that cannot be located is the
+        // difference between a working generation and "Prompt template not
+        // found" on a device, and this branch swallowed that once already.
+        workspaceDetail.push(`${dependency}: unresolved (${error.message})`);
         continue;
       }
       // Copy only what the package says it ships.
@@ -566,14 +570,23 @@ async function shippedTopLevelEntries(packageDir) {
 const missingDirs = new Set(['templates', 'snippets', 'prompts-pbl']);
 
 function resolvePackageDir(specifier) {
-  // Workspace packages first. `require.resolve` cannot be relied on for them:
-  // `@openmaic/generation` declares no root `exports`, so resolving it throws
-  // ERR_PACKAGE_PATH_NOT_EXPORTED, and the store lookup below cannot find a
-  // workspace package because pnpm never puts one there. The repository layout
-  // is the answer: `node_modules/@scope/name` is a symlink to `packages/…`.
+  // Workspace packages first, by the repository's own layout.
+  //
+  // `require.resolve` cannot be relied on for these: `@openmaic/generation`
+  // declares no root `exports`, so resolving it throws
+  // ERR_PACKAGE_PATH_NOT_EXPORTED, and the pnpm store fallback below cannot find
+  // a workspace package because pnpm does not put one there. Both the symlink
+  // and the `packages/` directory are tried, since which one exists depends on
+  // how the install was done.
   if (specifier.startsWith('@openmaic/')) {
-    const linked = path.join(root, 'node_modules', ...specifier.split('/'));
-    if (existsSync(path.join(linked, 'package.json'))) return linked;
+    const [, scope, name] = specifier.split('/');
+    const candidates = [
+      path.join(root, 'node_modules', scope, name),
+      path.join(root, 'packages', specifier),
+    ];
+    for (const candidate of candidates) {
+      if (existsSync(path.join(candidate, 'package.json'))) return candidate;
+    }
   }
 
   const fromRoot = createRequire(path.join(root, 'package.json'));
