@@ -360,6 +360,9 @@ async function main() {
       await copyTree(source, target, {
         skip: (from) => {
           const relative = path.relative(source, from).split(path.sep).join('/');
+          // The package root itself is never skipped: copyTree skips the entry
+          // it is called on, and `''` is not a name in the manifest's list.
+          if (relative === '') return false;
           if (relative === 'node_modules' || relative.startsWith('node_modules/')) return true;
           if (skipReplaced(from)) return true;
           const top = relative.split('/')[0];
