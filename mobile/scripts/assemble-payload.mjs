@@ -338,9 +338,25 @@ async function main() {
       // the manifest then skips the copy that would have filled it in. That is
       // exactly how @openmaic/generation reached the device without its
       // prompts.
+      const relativeFromPayload = (source) =>
+        path.relative(payload, source).split(path.sep).join('/');
+
+      // The workspace copy runs after the pruning rules above, so it has to
+      // apply them too: `@openmaic/storage` carries its own `node_modules/pg`
+      // (the real driver, declared as a dependency), and copying it back in
+      // reintroduces exactly the package this build replaces. `dereference`
+      // turns pnpm's symlink into a real directory, so the path shape is the
+      // only thing left to match on.
+      const skipReplaced = (from) => {
+        const relative = relativeFromPayload(from);
+        if (/(^|\/)node_modules\/(sharp|pg)$/.test(relative)) return true;
+        if (/(^|\/)node_modules\/@img(\/|$)/.test(relative)) return true;
+        return false;
+      };
+
       const manifest = path.join(target, 'package.json');
       if (!(await exists(manifest))) {
-        await copyTree(source, target);
+        await copyTree(source, target, { skip: skipReplaced });
         workspaceCopied.push(dependency);
         continue;
       }
@@ -354,7 +370,8 @@ async function main() {
           // `package.json` is already correct in the payload (the shrinker may
           // even have rewritten it), so it is the one file left alone.
           const relative = path.relative(source, from).split(path.sep).join('/');
-          return relative === 'package.json' && keepManifest;
+          if (relative === 'package.json' && keepManifest) return true;
+          return skipReplaced(from);
         },
       });
       workspaceRepaired.push(`${dependency} (${missing.join(', ')})`);
