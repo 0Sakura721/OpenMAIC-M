@@ -12,6 +12,34 @@ OpenMAIC 安卓版自己的变更记录。上游（[THU-MAIC/OpenMAIC](https://g
 
 ---
 
+## [v1.0.0-m15] — 2026-11-06
+
+### 修复
+
+- **生成课程报 `Cannot convert argument to a ByteString`**。完整报错是：
+
+  ```
+  Cannot convert argument to a ByteString because the character at
+  index 7 has a value of 24403 which is greater than 255.
+  ```
+
+  `index 7` 正好是 `Bearer ` 的长度，`24403` 是「当」——**API 密钥里混进了中文字符**。HTTP 头的值要转成 ByteString，而该编码表示不了 U+00FF 以上的字符，所以 `new Headers(...)` 在请求发出前就抛了。
+
+  问题在于保存时没有任何约束（`apiKey` 只是 `z.string()`），密钥存得很顺利，直到第一次调用模型才炸；而报错只给一个字符下标，完全无法让人联想到「是我填的密钥有问题」。
+
+  现在两处都处理了：
+
+  - **保存时拒绝**：密钥含 U+00FF 以上字符会当场报错，提示「API key 含有中文或其他非 ASCII 字符，请重新复制」。前后空白会 trim 而不是拒绝——粘贴时带换行很常见。
+  - **调用时兜底**：`withoutEmptyBearer` 是所有服务商调用拼 authorization 头的地方，那里把同样的 TypeError 转成一句指明「API 密钥」的中文提示。检查生效前存进去的坏密钥仍然会在使用时失败，但至少知道原因了。
+
+  （这并非手机特有，网页版同样会踩；只是本地部署里手动粘贴密钥更常见。）
+
+### 下载
+
+[v1.0.0-m15 的 Release](https://github.com/0Sakura721/OpenMAIC-M/releases/tag/v1.0.0-m15)（221 MB，arm64-v8a）
+
+---
+
 ## [v1.0.0-m14] — 2026-11-01
 
 把 m13 修的那两类问题**扫了一遍全仓库**——不是只修报出来的那两个地方。
