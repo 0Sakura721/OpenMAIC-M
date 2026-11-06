@@ -12,6 +12,46 @@ OpenMAIC 安卓版自己的变更记录。上游（[THU-MAIC/OpenMAIC](https://g
 
 ---
 
+## [v1.0.0-m17] — 2026-11-06
+
+**`Prompt template not found` 这次真的修好了。** m16 的 APK 是 400 MB 且仍然缺模板，这一版 225 MB 且模板齐全。
+
+### m16 为什么还是不行
+
+三个连锁错误，全都在我自己写的 workspace 复制逻辑里：
+
+1. **解构写错**。`'@openmaic/dsl'.split('/')` 只有两段，而 `[, scope, name]` 把 `name` 取成了 `undefined`，`path.join` 对每个包都抛错。外面是 `catch { continue }`，于是 7 个包全被静默跳过——**构建日志看起来一切正常**。
+
+2. **包根被跳过**。`path.relative(dir, dir)` 是空字符串，不在 `files` 白名单里，于是 `copyTree` 连目录都没创建。
+
+3. **复制范围失控**。整目录复制会带进包自己的 `node_modules`（`@openmaic/storage` 拉 AWS SDK，`dereference` 把每条链接展开成完整副本），APK 从 221 MB 涨到 400 MB。
+
+### 修复
+
+- 按 `package.json` 的 `files` 白名单复制顶层条目，加上 `main`/`module`/`types` 指向的目录；
+- 包根不参与名称过滤；
+- 已存在的文件不覆盖，但 `templates`/`snippets`/`prompts-pbl` 例外——tracer 的副本会漏掉它们；
+- workspace 复制同样套用 `pg`/`sharp` 替换规则；
+- 解析 workspace 包时同时尝试 `node_modules/@scope/name` 和 `packages/@scope/name`；
+- **解析失败不再静默**，会把原因写进构建日志。
+
+### 构建实测
+
+```
+[payload] after copy @openmaic/generation: LICENSE|dist|package.json|prompts-pbl|snippets|templates
+[payload]   templates: code-content, diagram-content, game-content, ..., requirements-to-outlines, ...
+[payload] @openmaic/generation templates: 13 entries
+APK 225 MB   ← 之前 400 MB
+```
+
+`requirements-to-outlines` 就在那 13 项里，它正是设备上报错时找不到的那个。
+
+### 下载
+
+[v1.0.0-m17 的 Release](https://github.com/0Sakura721/OpenMAIC-M/releases/tag/v1.0.0-m17)（225 MB，arm64-v8a）
+
+---
+
 ## [v1.0.0-m16] — 2026-11-06
 
 **真正修好 `Prompt template not found`。** m13 和 m14 都以为修了，其实都在修错的地方。
