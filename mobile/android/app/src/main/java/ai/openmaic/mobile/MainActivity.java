@@ -234,8 +234,12 @@ public class MainActivity extends Activity {
         // Hidden while the splash is up: the splash has its own labelled
         // "应用设置" button, and a floating circle over the logo would be noise.
         settingsHandle.setVisibility(View.GONE);
-        FrameLayout.LayoutParams handleParams = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        // An explicit square, not WRAP_CONTENT: the handle is a FrameLayout
+        // holding a fixed-size gear, and wrapping would measure against that
+        // child with no padding of its own — a gear-sized tap target rather than
+        // the 44dp the drag and clamp arithmetic assume.
+        int handleSize = dp(HANDLE_SIZE_DP);
+        FrameLayout.LayoutParams handleParams = new FrameLayout.LayoutParams(handleSize, handleSize);
         // Bottom-start, not top-end: the page has its own toolbar in the top
         // corners (a menu button on the left, language and display controls on
         // the right), and a floating control parked there reads as part of that
@@ -599,18 +603,21 @@ public class MainActivity extends Activity {
      */
     /**
      * The always-available settings handle: a small dimmed circle that opens the
-     * settings dialog on tap and can be dragged anywhere.
+     * settings dialog on tap and can be dragged.
      *
-     * Half-transparent at rest so it does not compete with the page, opaque
-     * while touched. Dragging uses raw deltas and writes the final position into
-     * the layout params, so the page underneath never sees the gesture.
+     * Dimmed at rest so it does not compete with the page, opaque while
+     * touched. Dragging uses raw deltas and writes the final position into the
+     * layout params, so the page underneath never sees the gesture.
+     *
+     * The gear is drawn rather than set as the `⚙` character. That codepoint
+     * comes from whichever emoji or symbol font the device maps it to, and on a
+     * phone it rendered as anything from a tiny outline to a colour emoji to a
+     * missing-glyph box. A vector drawable looks the same everywhere.
      */
     private View buildSettingsHandle() {
-        TextView handle = new TextView(this);
-        handle.setText("⚙");
-        handle.setTextSize(20);
-        handle.setTextColor(Color.rgb(31, 41, 55));
-        handle.setGravity(android.view.Gravity.CENTER);
+        FrameLayout handle = new FrameLayout(this);
+        int size = HANDLE_SIZE_DP;
+
         android.graphics.drawable.GradientDrawable background =
                 new android.graphics.drawable.GradientDrawable();
         background.setShape(android.graphics.drawable.GradientDrawable.OVAL);
@@ -621,11 +628,15 @@ public class MainActivity extends Activity {
         background.setStroke(dp(2), Color.argb(90, 0, 0, 0));
         handle.setBackground(background);
         handle.setElevation(dp(4));
-        handle.setAlpha(0.9f);
+        handle.setAlpha(RESTING_ALPHA);
         handle.setContentDescription("应用设置");
-        int size = dp(44);
-        handle.setWidth(size);
-        handle.setHeight(size);
+
+        android.widget.ImageView gear = new android.widget.ImageView(this);
+        gear.setImageDrawable(new GearDrawable(dp(20), Color.rgb(31, 41, 55)));
+        gear.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        FrameLayout.LayoutParams gearParams = new FrameLayout.LayoutParams(dp(20), dp(20));
+        gearParams.gravity = android.view.Gravity.CENTER;
+        handle.addView(gear, gearParams);
 
         handle.setOnClickListener(v -> showSettingsDialog());
 
@@ -643,7 +654,7 @@ public class MainActivity extends Activity {
                         downRawY = event.getRawY();
                         // Measure where the handle actually is rather than
                         // trusting the margins: while gravity-anchored the
-                        // margins are zero and the view sits at the top-end.
+                        // margins are zero and the view sits at its anchor.
                         int[] location = new int[2];
                         view.getLocationInWindow(location);
                         downLeft = location[0];
@@ -657,15 +668,23 @@ public class MainActivity extends Activity {
                         if (!dragging && Math.hypot(dx, dy) < dp(8)) return false;
                         dragging = true;
                         params.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
-                        params.leftMargin = Math.max(0, Math.round(downLeft + dx));
-                        params.topMargin = Math.max(0, Math.round(downTop + dy));
+                        int[] clamped = clampToScreen(downLeft + Math.round(dx), downTop + Math.round(dy));
+                        params.leftMargin = clamped[0];
+                        params.topMargin = clamped[1];
                         view.setLayoutParams(params);
                         return true;
                     }
                     case android.view.MotionEvent.ACTION_UP:
                     case android.view.MotionEvent.ACTION_CANCEL:
-                        view.setAlpha(0.9f);
+                        view.setAlpha(RESTING_ALPHA);
                         if (dragging) {
+                            // Settle against the nearer side, so the handle
+                            // stops being something the user has to place and
+                            // becomes something parked out of the way.
+                            int[] snapped = snapToEdge(params.leftMargin, params.topMargin);
+                            params.leftMargin = snapped[0];
+                            params.topMargin = snapped[1];
+                            view.setLayoutParams(params);
                             rememberHandlePosition(params.leftMargin, params.topMargin);
                             return true;
                         }
@@ -678,16 +697,132 @@ public class MainActivity extends Activity {
         return handle;
     }
 
+    /** Size of the handle in dp. Also its tap target. */
+    private static final int HANDLE_SIZE_DP = 44;
+
+    /** Opacity at rest: visible against the page without shouting. */
+    private static final float RESTING_ALPHA = 0.82f;
+
+    /**
+     * Keep the handle fully on screen.
+     *
+     * The old drag only clamped at zero, so a gesture toward the edge could park
+     * the handle past the right or bottom boundary — still present in the
+     * hierarchy, invisible, and impossible to grab again. The limits are the
+     * parent's measured size, and they are recomputed on every move so a
+     * rotation mid-drag cannot leave it outside.
+     */
+    private int[] clampToScreen(int left, int top) {
+        View parent = settingsHandle != null ? (View) settingsHandle.getParent() : null;
+        int width = parent != null ? parent.getWidth() : getResources().getDisplayMetrics().widthPixels;
+        int height = parent != null ? parent.getHeight() : getResources().getDisplayMetrics().heightPixels;
+        int size = dp(HANDLE_SIZE_DP);
+        int margin = dp(4);
+        int maxLeft = Math.max(margin, width - size - margin);
+        int maxTop = Math.max(margin, height - size - margin);
+        return new int[] {
+            Math.min(Math.max(left, margin), maxLeft),
+            Math.min(Math.max(top, margin), maxTop),
+        };
+    }
+
+    /**
+     * Move the handle to whichever side edge is nearer, keeping its height.
+     *
+     * Leaves the page's middle column — the part being read — uncovered, and
+     * makes the handle's position predictable instead of wherever a finger
+     * happened to lift.
+     */
+    private int[] snapToEdge(int left, int top) {
+        View parent = settingsHandle != null ? (View) settingsHandle.getParent() : null;
+        int width = parent != null ? parent.getWidth() : getResources().getDisplayMetrics().widthPixels;
+        int size = dp(HANDLE_SIZE_DP);
+        int margin = dp(8);
+        int centre = left + size / 2;
+        int snappedLeft = centre < width / 2 ? margin : Math.max(margin, width - size - margin);
+        int[] clamped = clampToScreen(snappedLeft, top);
+        return clamped;
+    }
+
+    /**
+     * A gear, drawn.
+     *
+     * Eight teeth around a ring with a hollow centre. Drawn rather than loaded
+     * from a resource so it inherits the handle's size and colour and needs no
+     * density-specific asset, and drawn rather than set as `⚙` because that
+     * codepoint resolves to an emoji font on many phones — different shape,
+     * different colour, sometimes a missing-glyph box.
+     */
+    private static final class GearDrawable extends android.graphics.drawable.Drawable {
+        private final android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        private final android.graphics.Path path = new android.graphics.Path();
+
+        GearDrawable(int size, int colour) {
+            paint.setColor(colour);
+            paint.setStyle(android.graphics.Paint.Style.FILL);
+            setBounds(0, 0, size, size);
+            build(size);
+        }
+
+        private void build(int size) {
+            float centre = size / 2f;
+            float outer = size * 0.5f;
+            float inner = size * 0.34f;
+            int teeth = 8;
+            path.reset();
+            // Alternating radii around a circle produce the teeth: eight points
+            // at the outer radius, eight at the inner one between them.
+            for (int i = 0; i < teeth * 2; i += 1) {
+                float angle = (float) (Math.PI * i / teeth);
+                float radius = (i % 2 == 0) ? outer : inner;
+                float x = centre + radius * (float) Math.cos(angle);
+                float y = centre + radius * (float) Math.sin(angle);
+                if (i == 0) path.moveTo(x, y);
+                else path.lineTo(x, y);
+            }
+            path.close();
+            // Hollow centre, so it reads as a gear rather than a flower.
+            float hole = size * 0.17f;
+            path.addCircle(centre, centre, hole, android.graphics.Path.Direction.CCW);
+        }
+
+        @Override
+        public void draw(android.graphics.Canvas canvas) {
+            canvas.drawPath(path, paint);
+        }
+
+        @Override
+        public void setAlpha(int alpha) {
+            paint.setAlpha(alpha);
+            invalidateSelf();
+        }
+
+        @Override
+        public void setColorFilter(android.graphics.ColorFilter filter) {
+            paint.setColorFilter(filter);
+            invalidateSelf();
+        }
+
+        @Override
+        public int getOpacity() {
+            return android.graphics.PixelFormat.OPAQUE;
+        }
+    }
+
     /**
      * Restore where the user last parked the handle, if they moved it.
      *
-     * A remembered position wins over the default, with one exception: a spot
-     * that lands on the bottom composer is ignored. The default moved up from
-     * 96dp to 220dp precisely because that area is occupied on every page that
-     * matters, so a position saved against the old default — or one dragged
-     * there by accident — would reintroduce the problem the change fixes. The
-     * user can still drag it down deliberately after this launch; only the
-     * stale saved value is dropped.
+     * A remembered position wins over the default, with two exceptions:
+     *
+     *   - a spot that lands on the bottom composer is ignored. The default moved
+     *     up from 96dp to 220dp precisely because that area is occupied on every
+     *     page that matters, so a position saved against the old default — or
+     *     one dragged there by accident — would reintroduce the problem.
+     *   - a spot outside the current screen is clamped back in. A saved value
+     *     comes from whatever orientation it was saved in, so rotating to
+     *     landscape and back, or a differently sized window, can leave the
+     *     coordinates past the edge — where the handle is invisible and
+     *     unreachable.
      */
     private void restoreHandlePosition(FrameLayout.LayoutParams params) {
         android.content.SharedPreferences prefs = getSharedPreferences("openmaic", MODE_PRIVATE);
@@ -696,16 +831,23 @@ public class MainActivity extends Activity {
         if (left < 0 || top < 0) return;
 
         int screenHeight = getResources().getDisplayMetrics().heightPixels;
-        int handleHeight = dp(44);
+        int handleHeight = dp(HANDLE_SIZE_DP);
         if (top + handleHeight > screenHeight - dp(200)) {
             // Landed in the composer strip: forget it and keep the new default.
             prefs.edit().remove("handleLeft").remove("handleTop").apply();
             return;
         }
 
+        int[] clamped = clampToScreen(left, top);
         params.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
-        params.leftMargin = left;
-        params.topMargin = top;
+        params.leftMargin = clamped[0];
+        params.topMargin = clamped[1];
+        if (clamped[0] != left || clamped[1] != top) {
+            // The view hierarchy has no width yet during layout, so the clamp
+            // above used the display metrics; persist the corrected value so the
+            // next launch starts from somewhere reachable.
+            rememberHandlePosition(clamped[0], clamped[1]);
+        }
     }
 
     private void rememberHandlePosition(int left, int top) {
