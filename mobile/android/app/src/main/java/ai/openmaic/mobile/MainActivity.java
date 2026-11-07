@@ -148,7 +148,12 @@ public class MainActivity extends Activity {
         FrameLayout root = new FrameLayout(this);
 
         webView = new WebView(this);
-        webView.setBackgroundColor(Color.WHITE);
+        // The page paints its own background, but there is a gap between this
+        // WebView being created and the first frame it draws, and any
+        // navigation repaints it. White there produced a visible flash on every
+        // page change and a bright box over the splash while the server was
+        // still starting. Matched to the page's own surface instead.
+        webView.setBackgroundColor(Color.rgb(248, 249, 252));
         // Android 15 (targetSdk 35+) draws edge-to-edge by default: the window
         // extends under the status bar, and the WebView paints behind it. The
         // page is a desktop-oriented web app that knows nothing about notches,
@@ -314,7 +319,7 @@ public class MainActivity extends Activity {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
-    @SuppressLint("SetJavaScriptEnabled")
+    @SuppressLint({"SetJavaScriptEnabled", "deprecation"})
     private void configureWebView() {
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -341,6 +346,28 @@ public class MainActivity extends Activity {
         // mixed-content blocking would otherwise drop requests the page makes
         // to absolute http URLs, and the CSP already permits only 'self'.
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+
+        // The page is laid out in CSS pixels and its breakpoints assume the
+        // device's own scale. Android's system font-size setting is inherited
+        // by WebView as text zoom, so a user on 130% sees every label larger
+        // than it was designed to be: headings wrap, buttons overflow, and
+        // cards overlap. Pinned to 100% because the page's own type scale is
+        // the only one that keeps the layout intact; the alternative is a
+        // layout that changes shape with a setting the page cannot see.
+        settings.setTextZoom(100);
+
+        // Android 12+ can force dark mode onto pages that do not ask for it.
+        // The app has its own theme switch (light / dark / follow system) and
+        // paints both palettes itself, so an algorithmic inversion on top
+        // produces double-inverted text and unreadable colour pairs.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            settings.setAlgorithmicDarkeningAllowed(false);
+        } else {
+            settings.setForceDark(WebSettings.FORCE_DARK_OFF);
+        }
+
+        // Media and course assets are served from the loopback origin, and a
+        // large response should not be re-fetched on every navigation.
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
 
         CookieManager cookies = CookieManager.getInstance();

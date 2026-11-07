@@ -42,6 +42,31 @@ type InteractivePickerMessage = {
 
 type ElementPickerMode = 'editor' | 'playback-stable-id';
 
+/**
+ * Cut a client-space box down to the band the visual viewport actually shows.
+ *
+ * A layout-space rectangle is measured against the whole page, keyboard included
+ * in the area it thinks it has. `visualViewport` reports the part a user can
+ * really see; the difference is the keyboard, a browser UI overlay, or a pinch
+ * zoom. Clamping here keeps a fixed-positioned iframe from extending under
+ * chrome the user cannot see past.
+ */
+function trimToVisualViewport(
+  box: { left: number; top: number; width: number; height: number } | null,
+  visual: { bottom: number; height: number },
+): { left: number; top: number; width: number; height: number } | null {
+  if (!box) return null;
+  // Without a reported viewport (older WebView, no visualViewport) there is
+  // nothing to trim: `height` stays infinite and `bottom` zero, so this is a
+  // no-op rather than a crop.
+  if (!Number.isFinite(visual.height) && visual.bottom === 0) return box;
+  const visibleBottom = visual.bottom;
+  if (box.top + box.height <= visibleBottom) return box;
+  const height = visibleBottom - box.top;
+  if (height <= 0) return null;
+  return { ...box, height };
+}
+
 export function resolveInteractivePickerMode(
   editorArmed: boolean,
   playbackArmed: boolean,
@@ -417,7 +442,44 @@ function PooledIframe({
   const rect = entry.rect;
   const clip = entry.clip ?? rect;
   const viewport = rect ? fitGenUiViewport(rect) : null;
-  const visibleViewport = viewport && clip ? intersectClientBoxes(viewport.box, clip) : null;
+
+  // On a phone the layout viewport is not the area a learner can see: the
+  // on-screen keyboard shrinks the *visual* viewport without resizing this
+  // component, and an interactive scene commonly contains its own text input.
+  // The wrap is fixed-positioned from the measured box, so without this the
+  // bottom of the scene sits underneath the keyboard and its inputs scroll out
+  // of reach. Trimmed to the visual viewport's rectangle in layout coordinates.
+  const [visualInset, setVisualInset] = useState<{ bottom: number; height: number }>({
+    bottom: 0,
+    height: Number.POSITIVE_INFINITY,
+  });
+  useLayoutEffect(() => {
+    const vv = typeof window === 'undefined' ? null : window.visualViewport;
+    if (!vv) return;
+    const update = () => {
+      // `offsetTop` is the visual viewport's position in layout coordinates, so
+      // the visible band is [offsetTop, offsetTop + height). When the keyboard
+      // is closed this equals the layout height and the trim is zero.
+      setVisualInset({ bottom: vv.offsetTop + vv.height, height: vv.height });
+    };
+    update();
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    return () => {
+      vv.removeEventListener('resize', update);
+      vv.removeEventListener('scroll', update);
+    };
+  }, []);
+
+  // The wrap is the *slot*, not the scaled content. Below the minimum scale the
+  // content is deliberately larger than the slot so its text stays legible,
+  // and clipping to the content's own box would then cut the scene in half —
+  // the thing the larger scale was meant to avoid. The slot clips instead, and
+  // the frame is positioned inside it so the scene can be panned.
+  const visibleViewport =
+    viewport && clip
+      ? trimToVisualViewport(clip, visualInset)
+      : null;
   // Require a real measured box before showing — a null or zero-size rect means
   // the slot hasn't laid out yet; showing then would flash a 0x0 iframe pinned
   // at the viewport origin.
@@ -442,16 +504,32 @@ function PooledIframe({
     top: visibleViewport?.top ?? 0,
     width: visibleViewport?.width ?? 0,
     height: visibleViewport?.height ?? 0,
-    overflow: 'hidden',
+    // Scrollable rather than hidden: when the scene is scaled up past the slot
+    // (see MIN_LEGIBLE_SCALE) the overflow has to be reachable, otherwise the
+    // right and bottom of an interactive page would simply not exist. On a
+    // desktop-sized slot the content fits exactly and no scrollbar appears.
+    overflow: 'auto',
+    // Touch scrolling is the only way to pan this on a phone.
+    WebkitOverflowScrolling: 'touch',
     borderRadius: '0.5rem',
     zIndex: 1,
     visibility: shown ? 'visible' : 'hidden',
     pointerEvents: shown ? 'auto' : 'none',
   };
+  // The canvas the scaled frame is laid inside. Scaled children report their
+  // layout size unscaled to the scroll container, so a `transform`-scaled iframe
+  // contributes nothing to scroll extent; this spacer carries the scaled
+  // dimensions instead, which is what makes the overflow reachable when the
+  // scene is larger than the slot.
+  const scrollExtent: CSSProperties = {
+    position: 'relative',
+    width: viewport ? GENUI_LOGICAL_WIDTH * viewport.scale : '100%',
+    height: viewport ? GENUI_LOGICAL_HEIGHT * viewport.scale : '100%',
+  };
   const iframeStyle: CSSProperties = {
     position: 'absolute',
-    left: viewport && visibleViewport ? viewport.box.left - visibleViewport.left : 0,
-    top: viewport && visibleViewport ? viewport.box.top - visibleViewport.top : 0,
+    left: 0,
+    top: 0,
     width: GENUI_LOGICAL_WIDTH,
     height: GENUI_LOGICAL_HEIGHT,
     border: 0,
@@ -461,22 +539,24 @@ function PooledIframe({
 
   return (
     <div style={wrapStyle}>
-      <iframe
-        ref={iframeRef}
-        srcDoc={observation.html}
-        onLoad={() => {
-          observationSession.current?.dispose();
-          observationSession.current =
-            iframeRef.current && observation.identity
-              ? createObservationSession(iframeRef.current, observation.identity)
-              : null;
-          markIframeReady(sceneId);
-        }}
-        src={entry.srcDoc ? undefined : entry.src}
-        style={iframeStyle}
-        title={`Interactive Scene ${sceneId}`}
-        sandbox="allow-scripts allow-forms allow-popups"
-      />
+      <div style={scrollExtent}>
+        <iframe
+          ref={iframeRef}
+          srcDoc={observation.html}
+          onLoad={() => {
+            observationSession.current?.dispose();
+            observationSession.current =
+              iframeRef.current && observation.identity
+                ? createObservationSession(iframeRef.current, observation.identity)
+                : null;
+            markIframeReady(sceneId);
+          }}
+          src={entry.srcDoc ? undefined : entry.src}
+          style={iframeStyle}
+          title={`Interactive Scene ${sceneId}`}
+          sandbox="allow-scripts allow-forms allow-popups"
+        />
+      </div>
       {showRuntimeError && latestRuntimeError ? (
         <InteractiveRuntimeErrorBanner
           message={latestRuntimeError}

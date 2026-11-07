@@ -26,6 +26,29 @@ import { create } from 'zustand';
 
 export const IFRAME_POOL_CAP = 3;
 
+/**
+ * How many interactive scenes stay loaded.
+ *
+ * Each entry holds a live iframe with its own JS heap and DOM, so the cap is a
+ * memory decision, not a UX one. It was a flat 3, which is right for a desktop
+ * tab and too much for a phone: Android WebView recycles the whole process
+ * when it runs short, and the symptom is a blank scene rather than an error —
+ * the frame is there, the document inside it was discarded.
+ *
+ * `deviceMemory` is the coarse bucket browsers expose for exactly this
+ * (`navigator.deviceMemory`, in GiB, rounded to powers of two). Devices that do
+ * not report it keep the original 3, since guessing low would reload scenes
+ * that did not need to reload.
+ */
+function poolCap(): number {
+  if (typeof navigator === 'undefined') return IFRAME_POOL_CAP;
+  const gigabytes = (navigator as { deviceMemory?: number }).deviceMemory;
+  if (typeof gigabytes !== 'number' || !Number.isFinite(gigabytes)) return IFRAME_POOL_CAP;
+  if (gigabytes <= 2) return 1;
+  if (gigabytes <= 4) return 2;
+  return IFRAME_POOL_CAP;
+}
+
 export interface IframeRect {
   readonly left: number;
   readonly top: number;
@@ -98,12 +121,13 @@ function evictLru(
   activeSceneId: string | null,
 ): Record<string, IframePoolEntry> {
   const ids = Object.keys(entries);
-  if (ids.length <= IFRAME_POOL_CAP) return entries;
+  const cap = poolCap();
+  if (ids.length <= cap) return entries;
   const evictable = ids
     .filter((id) => id !== activeSceneId)
     .sort((a, b) => entries[a].tick - entries[b].tick);
   const next = { ...entries };
-  let overflow = ids.length - IFRAME_POOL_CAP;
+  let overflow = ids.length - cap;
   for (const id of evictable) {
     if (overflow <= 0) break;
     delete next[id];
