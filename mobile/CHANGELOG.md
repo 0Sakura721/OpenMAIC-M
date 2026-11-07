@@ -12,6 +12,41 @@ OpenMAIC 安卓版自己的变更记录。上游（[THU-MAIC/OpenMAIC](https://g
 
 ---
 
+## [v1.0.0-m20] — 2026-11-07
+
+模板修好后，生成终于真的跑起来了——然后撞到下一个 bug。
+
+### 修复
+
+- **`The step was interrupted too many times`**。生成 worker 每拿到一个 run，立刻就放弃它，租约被反复接管，超过上限就暂停。
+
+  原因在我的 PGlite 兼容层：**每条 DML 的 `rowCount` 都返回 0**。它用的是 `rows.length`，对 SELECT 正确，但 INSERT/UPDATE/DELETE 不带 `RETURNING` 时根本不返回行，所以恒为 0。PGlite 其实把受影响行数放在 `affectedRows` 里，我从没读过。
+
+  这个数字不是给日志看的。`heartbeatGenerationRun` 用下面这条语句续租，并把 `rowCount === 0` 当作「租约已丢」：
+
+  ```sql
+  UPDATE generation_runs SET lease_heartbeat_at = $4
+   WHERE id = $1 AND lease_worker_id = $2 AND lease_generation = $3
+  ```
+
+  于是 worker 每次续租都以为失去了租约，主动放弃；run 被重新接管，如此重复到 `maxTakeovers`。**生成本身一直是好的**，杀死它的是这个假的失败信号。
+
+  `SELECT` 继续用返回行数，DML 改用 `affectedRows`。自检脚本新增五条断言覆盖这些语义。
+
+### 验证
+
+```
+--- rowCount ---
+update/miss, select, insert, delete: 1, 0, 1, 1, 1 (want 1, 0, 1, 1, 1)
+PASS
+```
+
+### 下载
+
+[v1.0.0-m20 的 Release](https://github.com/0Sakura721/OpenMAIC-M/releases/tag/v1.0.0-m20)（239 MB，arm64-v8a）
+
+---
+
 ## [v1.0.0-m19] — 2026-11-07
 
 **`Prompt template not found` 的真正原因找到了。** 之前四版都在检查「文件在不在」，而文件一直都在。
