@@ -12,6 +12,49 @@ OpenMAIC 安卓版自己的变更记录。上游（[THU-MAIC/OpenMAIC](https://g
 
 ---
 
+## [v1.0.0-m19] — 2026-11-07
+
+**`Prompt template not found` 的真正原因找到了。** 之前四版都在检查「文件在不在」，而文件一直都在。
+
+### 真正的原因
+
+`@openmaic/generation` 用 `import.meta.url` 推算模板目录：
+
+```js
+const DEFAULT_PROMPTS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+```
+
+模块保持自己的 URL 时，`../..` 正好是包根，那里有 `templates/`。但 Turbopack 把这个包**编译进了 chunk**，并把表达式改写成：
+
+```js
+{ get url() { return e.F("packages/@openmaic/generation/dist/prompts/loader.js") } }
+```
+
+设备上这个虚拟路径的 `../..` 落在 `.next/server`，那里没有模板。
+
+**决定性证据**：解开已发布的 payload，`requirements-to-outlines` 只出现在 `.next/server/chunks/` 下，从未出现在 `node_modules/@openmaic/generation/` 里；而 13 个模板目录安安静静躺在 payload 里，没人读。
+
+### 修复
+
+- 加载器先读 `OPENMAIC_GENERATION_PROMPTS_DIR`，Android 运行时把它设为包的真实目录。
+- **CI 新增 probe**：在 payload 自己的树里让包实际构建一次 `requirements-to-outlines` prompt。之前所有检查都在问「文件在不在」，答案一直是「在」。
+
+### 验证
+
+```
+[openmaic-mobile] generation prompts: .../node_modules/@openmaic/generation/templates
+[verify-runtime] prompt templates resolve: resolved 17536
+[verify-runtime] PASS
+```
+
+这个 probe 第一次跑失败在 `nanoid`——它 import 了包根，把 scene generator 的依赖也拖了进来（Next bundle 里有，裸 node 里没有）。改成直接 import `dist/prompts/index.js` 后正常。
+
+### 下载
+
+[v1.0.0-m19 的 Release](https://github.com/0Sakura721/OpenMAIC-M/releases/tag/v1.0.0-m19)（约 240 MB，arm64-v8a）
+
+---
+
 ## [v1.0.0-m18] — 2026-11-06
 
 **同步上游到 v1.4.1。** 上游 49 个提交合入，无冲突。
