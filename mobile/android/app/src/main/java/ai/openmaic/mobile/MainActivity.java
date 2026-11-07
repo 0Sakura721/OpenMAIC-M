@@ -661,11 +661,17 @@ public class MainActivity extends Activity {
                         downTop = location[1];
                         dragging = false;
                         view.setAlpha(1f);
-                        return false; // Let a simple tap reach the click listener.
+                        // Consume the down. Returning false here ended the
+                        // gesture before it started: the parent keeps the
+                        // stream, no ACTION_MOVE ever arrives, and dragging did
+                        // nothing at all. A tap is distinguished on release
+                        // instead — see below.
+                        view.getParent().requestDisallowInterceptTouchEvent(true);
+                        return true;
                     case android.view.MotionEvent.ACTION_MOVE: {
                         float dx = event.getRawX() - downRawX;
                         float dy = event.getRawY() - downRawY;
-                        if (!dragging && Math.hypot(dx, dy) < dp(8)) return false;
+                        if (!dragging && Math.hypot(dx, dy) < dp(8)) return true;
                         dragging = true;
                         params.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
                         int[] clamped = clampToScreen(downLeft + Math.round(dx), downTop + Math.round(dy));
@@ -677,6 +683,16 @@ public class MainActivity extends Activity {
                     case android.view.MotionEvent.ACTION_UP:
                     case android.view.MotionEvent.ACTION_CANCEL:
                         view.setAlpha(RESTING_ALPHA);
+                        // Hand the stream back, or the parent keeps skipping
+                        // interception for the rest of the session.
+                        view.getParent().requestDisallowInterceptTouchEvent(false);
+                        if (event.getActionMasked() == android.view.MotionEvent.ACTION_UP
+                                && Math.hypot(event.getRawX() - downRawX, event.getRawY() - downRawY) < dp(8)) {
+                            // A press that never travelled: treat it as the tap
+                            // it was meant to be.
+                            view.performClick();
+                            return true;
+                        }
                         if (dragging) {
                             // Settle against the nearer side, so the handle
                             // stops being something the user has to place and
@@ -686,9 +702,8 @@ public class MainActivity extends Activity {
                             params.topMargin = snapped[1];
                             view.setLayoutParams(params);
                             rememberHandlePosition(params.leftMargin, params.topMargin);
-                            return true;
                         }
-                        return false;
+                        return true;
                     default:
                         return false;
                 }
