@@ -19,7 +19,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, open, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { inflateRaw } from 'node:zlib';
 import { promisify } from 'node:util';
 
@@ -232,12 +232,24 @@ async function exercisePromptTemplates(payloadDir) {
     throw new Error('@openmaic/generation is not in the payload');
   }
 
+  // Imported by absolute URL: the package's exports map does not publish the
+  // prompts subpath, and pulling the package root would drag in the scene
+  // generators and their dependencies -- provided by the Next bundle, absent
+  // from a bare node process. This is the module that reads the templates.
+  const loaderUrl = pathToFileURL(
+    path.join(generationDir, 'dist', 'prompts', 'index.js'),
+  ).href;
+
   const probe = path.join(payloadDir, '.prompt-probe.mjs');
   await writeFile(
     probe,
     [
-      "import { buildPrompt, PROMPT_IDS } from '@openmaic/generation';",
-      'const built = buildPrompt(PROMPT_IDS.REQUIREMENTS_TO_OUTLINES, {',
+      // The prompts subpath, not the package root: the root pulls in the scene
+      // generators and their dependencies, which the Next bundle provides and a
+      // bare node process does not. The subpath is what actually reads the
+      // templates.
+      'import { buildPrompt } from ' + JSON.stringify(loaderUrl) + ';',
+      'const built = buildPrompt("requirements-to-outlines", {',
       "  requirement: 'probe',",
       "  pdfContent: 'None',",
       "  availableImages: 'None',",
