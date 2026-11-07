@@ -71,6 +71,25 @@ const typed = await pool.query('select * from types');
 const row = typed.rows[0];
 console.log('int8:', typeof row.i8, row.i8, '| numeric:', typeof row.n, row.n, '| bytea:', Buffer.isBuffer(row.by), '| jsonb:', JSON.stringify(row.js));
 
+// `rowCount` drives real decisions, not just logging: the generation runner
+// heartbeats a run with an UPDATE and reads a zero as "the lease is gone". It
+// was always zero for DML, so every run the worker claimed was abandoned and
+// repeatedly taken over until it failed with "The step was interrupted too many
+// times".
+console.log('--- rowCount ---');
+await pool.query('create table if not exists rc(id text primary key, v int)');
+await pool.query("insert into rc values ('a', 1)");
+const updated = await pool.query('update rc set v = $2 where id = $1', ['a', 7]);
+const missed = await pool.query('update rc set v = $2 where id = $1', ['absent', 7]);
+const selected = await pool.query('select * from rc');
+const inserted = await pool.query("insert into rc values ('b', 2)");
+const deleted = await pool.query("delete from rc where id = 'b'");
+const counts = [updated.rowCount, missed.rowCount, selected.rowCount, inserted.rowCount, deleted.rowCount];
+console.log('update/miss, select, insert, delete:', counts.join(', '), '(want 1, 0, 1, 1, 1)');
+if (counts.join(',') !== '1,0,1,1,1') {
+  throw new Error(`rowCount is wrong: ${counts.join(', ')}`);
+}
+
 await pool.end();
 await shim.closeDatabase();
 await rm(dataDir, { recursive: true, force: true });

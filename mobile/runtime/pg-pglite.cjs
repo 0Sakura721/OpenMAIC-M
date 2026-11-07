@@ -88,7 +88,16 @@ function normalise(text, values) {
 }
 
 /** PGlite's result, reshaped the way node-postgres callers read it. */
-function toResult(rows, fields, command) {
+/**
+ * @param affectedRows PGlite's own count of the rows an INSERT/UPDATE/DELETE
+ *   touched. It has to be passed through: `rows.length` is the wrong answer for
+ *   DML without `RETURNING`, which returns no rows at all — an UPDATE that
+ *   matched one row reported `rowCount: 0`, and `heartbeatGenerationRun` reads
+ *   that as "the lease is gone". The worker then abandoned every run it claimed,
+ *   the lease was repeatedly taken over, and the user saw "The step was
+ *   interrupted too many times".
+ */
+function toResult(rows, fields, command, affectedRows) {
   const mapped = (fields ?? []).map((field, index) => ({
     name: field.name ?? `column${index + 1}`,
     tableID: 0,
@@ -100,11 +109,18 @@ function toResult(rows, fields, command) {
   }));
   return {
     command,
-    // node-postgres counts returned rows for row-returning statements and
-    // affected rows for DML; PGlite does not surface the tag, and every caller
-    // here reads `rowCount ?? 0` or compares it to 0, so returned rows are the
-    // correct answer for both.
-    rowCount: ROW_COUNT_COMMANDS.has(command) ? rows.length : 0,
+    // SELECT counts the rows it returned. DML counts what PGlite reports as
+    // affected, because without `RETURNING` it returns no rows at all —
+    // preferring `rows.length` there made every write look like it matched
+    // nothing, and `heartbeatGenerationRun` reads a zero as "lease lost".
+    rowCount:
+      command === 'SELECT'
+        ? rows.length
+        : ROW_COUNT_COMMANDS.has(command) && typeof affectedRows === 'number'
+          ? affectedRows
+          : ROW_COUNT_COMMANDS.has(command)
+            ? rows.length
+            : 0,
     oid: 0,
     rows,
     fields: mapped,
@@ -270,7 +286,7 @@ class PGliteClient {
       // PGlite's errors already carry the PostgreSQL fields (`code`, `detail`,
       // `constraint`, …) that callers branch on, so they propagate unchanged.
       const result = await this._db.query(statement.text, statement.values);
-      return toResult(result.rows, result.fields, command);
+      return toResult(result.rows, result.fields, command, result.affectedRows);
     } finally {
       if (control === 'end' && transactionGate.owner === this && this._releaseTransaction) {
         this._releaseTransaction();
