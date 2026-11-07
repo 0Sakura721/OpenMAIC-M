@@ -11,7 +11,16 @@ import type { LoadedPrompt, PromptId, PromptVariableDefaults, SnippetId } from '
 // `src/prompts` and `dist/prompts` have the same depth below the package root.
 // Resolve from this module's URL via path operations so app bundlers do not
 // mistake the Markdown directory for a statically imported module asset.
-const DEFAULT_PROMPTS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+//
+// That resolution only holds while the module keeps its own URL. A bundler
+// rewrites `import.meta.url` into a reference to the bundled module's virtual
+// path, so `../..` lands inside the build output instead of the package — the
+// files are on disk but nothing reads them. OPENMAIC_GENERATION_PROMPTS_DIR
+// overrides the lookup for exactly that case; it is documented in the README
+// the server reads its configuration from.
+const DEFAULT_PROMPTS_DIR =
+  process.env.OPENMAIC_GENERATION_PROMPTS_DIR?.trim() ||
+  resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 const PROMPT_VARIABLE_DEFAULTS = {
   'pbl-actions': {

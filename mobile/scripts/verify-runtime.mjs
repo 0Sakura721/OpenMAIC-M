@@ -1,8 +1,8 @@
-/**
+﻿/**
  * CI check: does the PGlite-backed `pg` actually boot the application?
  *
  * The Android build replaces node-postgres with `mobile/runtime/pg-pglite.cjs`.
- * A shim that merely type-checks is worthless — the failure mode is a server
+ * A shim that merely type-checks is worthless 鈥?the failure mode is a server
  * that starts and then answers every request with a 500 because the schema
  * bootstrap could not run. So this runs the real server against the real shim
  * on the same machine, and fails the build if a course cannot be created and
@@ -16,7 +16,7 @@
  * Usage:  node mobile/scripts/verify-runtime.mjs [--payload <zip|dir>] [--keep]
  */
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, open, readdir, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -52,7 +52,7 @@ function log(...args) {
  * Materialise the payload: a directory is used as-is, a zip is inflated.
  *
  * This re-implements reading a zip instead of shelling out to `unzip`, because
- * the Windows and Linux runners disagree about whether it exists — and because
+ * the Windows and Linux runners disagree about whether it exists 鈥?and because
  * the whole point of the check is that the archive is readable by a plain zip
  * reader, which this is.
  */
@@ -211,7 +211,79 @@ async function exercisePersistence() {
   if (!stages?.some((entry) => entry.id === stage.id)) {
     throw new Error(`the created stage ${stage.id} is not in the library: ${JSON.stringify(stages)}`);
   }
-  log('read back', stages.length, 'stage(s) — persistence round trip works');
+  log('read back', stages.length, 'stage(s) 鈥?persistence round trip works');
+}
+
+/**
+ * Fail when the prompt templates cannot be *resolved*, not merely found.
+ *
+ * The payload containing templates/requirements-to-outlines/system.md is not
+ * the same as the package reading it. @openmaic/generation resolves that
+ * directory from import.meta.url, and Turbopack compiles the package into a
+ * chunk whose virtual path makes ../.. land in the build output. Three
+ * releases shipped with all 13 template directories present and generation
+ * still failing, because every check asked whether the files were there.
+ *
+ * This asks the package itself, in the payload's own tree.
+ */
+async function exercisePromptTemplates(payloadDir) {
+  const generationDir = path.join(payloadDir, 'node_modules', '@openmaic', 'generation');
+  if (!(await stat(generationDir).catch(() => null))) {
+    throw new Error('@openmaic/generation is not in the payload');
+  }
+
+  const probe = path.join(payloadDir, '.prompt-probe.mjs');
+  await writeFile(
+    probe,
+    [
+      "import { buildPrompt, PROMPT_IDS } from '@openmaic/generation';",
+      'const built = buildPrompt(PROMPT_IDS.REQUIREMENTS_TO_OUTLINES, {',
+      "  requirement: 'probe',",
+      "  pdfContent: 'None',",
+      "  availableImages: 'None',",
+      "  userProfile: 'None',",
+      '  hasSourceImages: false,',
+      '  imageEnabled: false,',
+      '  videoEnabled: false,',
+      '  mediaEnabled: false,',
+      "  researchContext: 'None',",
+      "  teacherContext: '',",
+      '});',
+      'if (!built) { console.error("UNRESOLVED"); process.exit(3); }',
+      'console.log("resolved", built.system.length);',
+    ].join('\n'),
+  );
+
+  try {
+    const result = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [probe], {
+        cwd: payloadDir,
+        env: {
+          ...process.env,
+          OPENMAIC_GENERATION_PROMPTS_DIR: generationDir,
+        },
+      });
+      let out = '';
+      let err = '';
+      child.stdout.on('data', (chunk) => {
+        out += chunk;
+      });
+      child.stderr.on('data', (chunk) => {
+        err += chunk;
+      });
+      child.on('error', reject);
+      child.on('close', (code) => resolve({ code, out, err }));
+    });
+    if (result.code !== 0) {
+      throw new Error(
+        'the generation package cannot resolve its prompt templates:\n' +
+          `${result.err.trim() || result.out.trim()}`,
+      );
+    }
+    log('prompt templates resolve:', result.out.trim());
+  } finally {
+    await rm(probe, { force: true });
+  }
 }
 
 async function main() {
@@ -272,6 +344,9 @@ async function main() {
     await waitForHealth(Date.now() + BOOT_TIMEOUT_MS);
     log('server is healthy');
     await exercisePersistence();
+    // After the server is up: this is the check that would have caught three
+    // releases of "Prompt template not found" with the files present.
+    await exercisePromptTemplates(payloadDir);
     log('PASS');
   } catch (error) {
     console.error('[verify-runtime] FAIL:', error.message);

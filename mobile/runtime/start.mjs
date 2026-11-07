@@ -29,7 +29,7 @@
  */
 import http from 'node:http';
 import path from 'node:path';
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -185,6 +185,34 @@ async function main() {
   process.env.OPENMAIC_CLASSROOMS_DIR ??= path.join(dataDir, 'classrooms');
   process.env.OPENMAIC_MATERIALS_DIR ??= path.join(dataDir, 'materials');
   process.env.OPENMAIC_USAGE_DIR ??= path.join(dataDir, 'usage');
+
+  // The prompt templates ship inside @openmaic/generation, but Turbopack
+  // compiles that package into a chunk, and the package resolves its template
+  // directory from `import.meta.url` — which the bundler rewrites into the
+  // chunk's virtual path. `../..` then lands in the build output, so the
+  // templates are on disk and nothing reads them: every course generation
+  // failed with "Prompt template not found" while the payload contained all 13.
+  //
+  // Pointed at the real directory instead. The package reads this variable
+  // first, so it also works if the bundler ever leaves the module alone.
+  const generationPrompts = path.join(
+    projectDir,
+    'node_modules',
+    '@openmaic',
+    'generation',
+    'templates',
+  );
+  if (existsSync(generationPrompts)) {
+    process.env.OPENMAIC_GENERATION_PROMPTS_DIR = path.join(
+      projectDir,
+      'node_modules',
+      '@openmaic',
+      'generation',
+    );
+    log('generation prompts:', generationPrompts);
+  } else {
+    log('generation prompts: NOT FOUND at', generationPrompts);
+  }
 
   // --- 3. the Next.js server --------------------------------------------
   status('正在加载服务端…');
