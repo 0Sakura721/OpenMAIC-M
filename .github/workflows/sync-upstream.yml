@@ -22,10 +22,11 @@ name: Sync upstream
 
 on:
   schedule:
-    # Every six hours. Upstream's rate is uneven — quiet for a day, then a dozen
-    # merges — and six hours keeps the lag under a morning without opening a
-    # merge per commit.
-    - cron: '17 */6 * * *'
+    # Once a day, at 00:00 UTC. Upstream merges in bursts, so a daily pass picks
+    # up a whole day's work in one merge commit rather than several small ones,
+    # and the time is predictable: a sync that ran every six hours landed at
+    # whatever hour the offset happened to fall on.
+    - cron: '0 0 * * *'
   workflow_dispatch:
     inputs:
       dry_run:
@@ -136,7 +137,7 @@ jobs:
             --description 'The scheduled upstream merge needs a person' \
             --color FBCA04 2>/dev/null || true
           # One open issue, reused: a daily schedule would otherwise leave a new
-          # one every six hours for the same unresolved conflict.
+          # one per day for the same unresolved conflict.
           EXISTING="$(gh issue list --label upstream-sync --state open --limit 1 --json number --jq '.[0].number // empty')"
           if [ -n "$EXISTING" ]; then
             gh issue comment "$EXISTING" --body-file report.md
