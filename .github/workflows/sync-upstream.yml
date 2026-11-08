@@ -1,0 +1,217 @@
+name: Sync upstream
+
+# Merges THU-MAIC/OpenMAIC into main without a developer's machine.
+#
+# The Android port tracks an upstream that moves several times a day. Doing that
+# by hand means remembering to fetch, watching for conflicts, and then pushing —
+# all of which need a laptop awake. This runs on a schedule instead.
+#
+# Two things make this less trivial than `git pull`, and both are the reason it
+# is a workflow rather than a cron line somewhere:
+#
+#   - **A GITHUB_TOKEN push does not start other workflows.** GitHub suppresses
+#     the events a token-authenticated push would raise, so the APK build would
+#     never run on a sync it did not see. The dispatch at the end is not
+#     belt-and-braces; without it a synced commit sits there unbuilt.
+#   - **A merge can conflict.** Resolving one automatically would mean guessing,
+#     so a conflict aborts: main keeps the last good state and an issue says
+#     what needs a person.
+#
+# Everything is verified before the push, not after: a synced tree that does not
+# type-check would turn main red and take the next APK build down with it.
+
+on:
+  schedule:
+    # Every six hours. Upstream's rate is uneven — quiet for a day, then a dozen
+    # merges — and six hours keeps the lag under a morning without opening a
+    # merge per commit.
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Merge and verify, but do not push'
+        type: boolean
+        default: false
+
+# One sync at a time: two overlapping merges into main would race on the same
+# ref, and the loser would be told its push was rejected after doing all the
+# work.
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+permissions:
+  # Push the merge, and read the upstream repository.
+  contents: write
+  # Start the APK build, which a token-driven push cannot do by itself.
+  actions: write
+  # Open the issue a conflict needs.
+  issues: write
+
+env:
+  UPSTREAM_REPOSITORY: THU-MAIC/OpenMAIC
+  UPSTREAM_REMOTE: upstream
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # A full history: the merge needs a common ancestor with upstream, and
+          # a shallow clone has none.
+          fetch-depth: 0
+          # The token, not the default: the default credential is stripped when
+          # the checkout leaves it out, and the push below needs it.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Identify the run
+        id: identity
+        run: |
+          echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch upstream
+        id: fetch
+        run: |
+          set -euo pipefail
+          git config user.name 'openmaic-sync'
+          git config user.email 'openmaic-sync@users.noreply.github.com'
+          git remote add "$UPSTREAM_REMOTE" "https://github.com/$UPSTREAM_REPOSITORY.git"
+          git fetch --no-tags "$UPSTREAM_REMOTE" main
+
+          if git merge-base --is-ancestor "$UPSTREAM_REMOTE/main" HEAD; then
+            echo "Upstream is already contained in main; nothing to do."
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          COUNT="$(git rev-list --count "HEAD..$UPSTREAM_REMOTE/main")"
+          echo "needed=true" >> "$GITHUB_OUTPUT"
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "Merging $COUNT upstream commit(s)."
+
+      - name: Merge
+        if: steps.fetch.outputs.needed == 'true'
+        id: merge
+        run: |
+          set -euo pipefail
+          COUNT="${{ steps.fetch.outputs.count }}"
+          # `--no-ff` keeps the sync readable in the history: one commit that
+          # says what came in, rather than a fast-forward that hides the join.
+          if ! git merge --no-ff --no-edit "$UPSTREAM_REMOTE/main" \
+              -m "chore: sync upstream ($COUNT commit(s))" 2>merge.log; then
+            echo "conflicted=true" >> "$GITHUB_OUTPUT"
+            git merge --abort || true
+            {
+              echo '### Upstream sync stopped on a conflict'
+              echo
+              echo "Merging \`$UPSTREAM_REPOSITORY\` into \`main\` conflicted, so nothing was pushed."
+              echo 'main is unchanged and still the last good state.'
+              echo
+              echo 'Files that conflicted:'
+              echo '```'
+              # The paths are gone once the merge is aborted, so they come from
+              # the log the failed merge wrote.
+              grep -A1000 'CONFLICT' merge.log || sed -n '1,40p' merge.log
+              echo '```'
+              echo
+              echo 'Resolve by merging upstream by hand, then this workflow will'
+              echo 'pick up from wherever main ends up.'
+            } > report.md
+            exit 0
+          fi
+          echo "conflicted=false" >> "$GITHUB_OUTPUT"
+
+      - name: Report the conflict
+        if: steps.merge.outputs.conflicted == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # `gh issue create --label` fails when the label does not exist yet,
+          # and on a fresh clone it does not. Created idempotently; a failure
+          # here is not fatal, because the issue matters more than its label.
+          gh label create upstream-sync \
+            --description 'The scheduled upstream merge needs a person' \
+            --color FBCA04 2>/dev/null || true
+          # One open issue, reused: a daily schedule would otherwise leave a new
+          # one every six hours for the same unresolved conflict.
+          EXISTING="$(gh issue list --label upstream-sync --state open --limit 1 --json number --jq '.[0].number // empty')"
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file report.md
+          else
+            gh issue create \
+              --title 'Upstream sync needs a manual merge' \
+              --label upstream-sync \
+              --body-file report.md
+          fi
+          echo "::error::upstream merge conflicted; see the issue"
+
+      - name: Fail the run on a conflict
+        if: steps.merge.outputs.conflicted == 'true'
+        run: exit 1
+
+      # Verification before the push, not after: a merge that does not
+      # type-check would turn main red and take the next APK build with it.
+      #
+      # The shared setup action, not a hand-rolled install: it restores the
+      # workspace package build from a cache keyed on their sources, so a sync
+      # that only touched upstream's app code does not pay the ~85 s rebuild.
+      - name: Install dependencies
+        if: steps.fetch.outputs.needed == 'true'
+        uses: ./.github/actions/setup-workspace
+
+      - name: Type-check the merged tree
+        if: steps.fetch.outputs.needed == 'true'
+        run: pnpm exec tsc --noEmit -p tsconfig.json
+
+      - name: Push
+        if: steps.fetch.outputs.needed == 'true' && github.event.inputs.dry_run != 'true'
+        id: push
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # A rebase here would flatten the merge commit this job just made and
+          # lose the record of where upstream joined. Instead: if main moved
+          # while this job was verifying, merge it — a second merge commit is
+          # honest about the order things happened in.
+          git fetch origin main
+          if ! git merge-base --is-ancestor origin/main HEAD; then
+            echo "main advanced during this run; merging it before pushing."
+            git merge --no-ff --no-edit origin/main \
+              -m 'chore: reconcile with main before syncing upstream'
+          fi
+          HEAD_SHA="$(git rev-parse HEAD)"
+          # A plain push, not a force: if this is rejected, another writer won
+          # and its work must not be overwritten.
+          git push origin "HEAD:main"
+          echo "merged_sha=${HEAD_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      # A token push raises no workflow events, so the APK build has to be asked
+      # for by name. This is the whole reason the sync cannot be a plain cron
+      # `git push`.
+      - name: Start the APK build
+        if: steps.push.outputs.merged_sha != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh workflow run apk.yml --ref main
+          echo "Dispatched APK for ${{ steps.push.outputs.merged_sha }}"
+
+      - name: Summary
+        if: steps.fetch.outputs.needed == 'true'
+        run: |
+          {
+            echo '### Upstream sync'
+            echo
+            echo "- Commits merged: ${{ steps.fetch.outputs.count }}"
+            echo "- Dry run: ${{ github.event.inputs.dry_run == 'true' && 'yes' || 'no' }}"
+            if [ -n "${{ steps.push.outputs.merged_sha }}" ]; then
+              echo "- Pushed as ${{ steps.push.outputs.merged_sha }}, APK build requested"
+            elif [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+              echo '- Not pushed (dry run)'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
