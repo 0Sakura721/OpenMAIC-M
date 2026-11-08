@@ -67,6 +67,8 @@ public class MainActivity extends Activity {
     private static final int NOTIFICATION_PERMISSION_REQUEST = 4002;
     private static final int REQUEST_BACKUP = 4003;
     private static final int REQUEST_RESTORE = 4004;
+    /** Where the page's own file (course zip, PPTX, HTML) is written. */
+    private static final int REQUEST_SAVE_FILE = 4005;
 
     private final AtomicBoolean bootStarted = new AtomicBoolean(false);
 
@@ -83,8 +85,7 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(buildLayout());
         configureWebView();
-        requestNotificationPermission();
-        // The Node runtime reports each phase on stdout; the JNI log pipe calls
+        requestNotificationPermission();        // The Node runtime reports each phase on stdout; the JNI log pipe calls
         // back here, and this activity renders the line. Registered before the
         // runtime starts so no early phase is missed.
         NodeRuntime.setStatusListener(this);
@@ -378,6 +379,13 @@ public class MainActivity extends Activity {
         cookies.setAcceptCookie(true);
         cookies.setAcceptThirdPartyCookies(webView, true);
 
+        // The bridge the page saves files through. `file-saver` builds a Blob
+        // URL and clicks an anchor, which a WebView silently drops: it has no
+        // download manager, and `blob:` never reaches a DownloadListener either.
+        // Every export in the app — course zip, PPTX, standalone HTML, script —
+        // produced nothing on a phone for exactly that reason.
+        webView.addJavascriptInterface(new FileBridge(this), "OpenMAICFiles");
+
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
@@ -404,6 +412,7 @@ public class MainActivity extends Activity {
                     // way back to the shell's settings from here on.
                     if (settingsHandle != null) settingsHandle.setVisibility(View.VISIBLE);
                 }
+                injectFileSaveBridge(view);
             }
         });
 
@@ -524,6 +533,104 @@ public class MainActivity extends Activity {
         String channel = DeviceSettings.readUpdateChannel(this);
         checkForUpdates(channel, false);
     }
+
+    /**
+     * Teach the page to hand its downloads to the shell.
+     *
+     * `file-saver` ends in an anchor with a `download` attribute and a `blob:`
+     * href, then clicks it. A WebView drops that on the floor: it has no
+     * download manager, and `blob:` never reaches a DownloadListener — so every
+     * export (course zip, PPTX, standalone HTML, script) looked like it worked
+     * and produced no file.
+     *
+     * The script below listens in the capture phase, before the anchor's own
+     * handler navigates, reads the Blob as base64 and hands it to
+     * {@link FileBridge}. It is injected per page because it has to survive a
+     * reload, and it is idempotent so a second injection is harmless.
+     *
+     * A `data:` href is handled the same way: `file-saver` falls back to one
+     * when `URL.createObjectURL` is unavailable, and it has the same outcome.
+     */
+    private void injectFileSaveBridge(WebView view) {
+        view.evaluateJavascript(FILE_SAVE_BRIDGE_JS, null);
+    }
+
+    /**
+     * The injected script.
+     *
+     * Deliberately plain ES5-era JavaScript with no optional chaining or arrow
+     * functions: it runs in whatever WebView the device ships, and a syntax
+     * error would take the whole save path down silently.
+     */
+    private static final String FILE_SAVE_BRIDGE_JS =
+            "(function () {\n"
+                    + "  if (window.__openmaicFileBridge) return;\n"
+                    + "  if (!window.OpenMAICFiles) return;\n"
+                    + "  window.__openmaicFileBridge = true;\n"
+                    + "\n"
+                    + "  function reportError(message) {\n"
+                    + "    if (window.console && console.warn) console.warn('[openmaic] save:', message);\n"
+                    + "  }\n"
+                    + "\n"
+                    + "  function base64FromBlob(blob, done) {\n"
+                    + "    var reader = new FileReader();\n"
+                    + "    reader.onloadend = function () {\n"
+                    + "      var result = reader.result || '';\n"
+                    + "      var comma = result.indexOf(',');\n"
+                    + "      done(comma >= 0 ? result.slice(comma + 1) : '');\n"
+                    + "    };\n"
+                    + "    reader.onerror = function () { done(''); };\n"
+                    + "    reader.readAsDataURL(blob);\n"
+                    + "  }\n"
+                    + "\n"
+                    + "  function handOff(blob, name, mime) {\n"
+                    + "    if (!blob) return false;\n"
+                    + "    base64FromBlob(blob, function (encoded) {\n"
+                    + "      if (!encoded) { reportError('read failed'); return; }\n"
+                    + "      var ok = false;\n"
+                    + "      try {\n"
+                    + "        ok = window.OpenMAICFiles.save(encoded, name || 'download', mime || blob.type || 'application/octet-stream');\n"
+                    + "      } catch (error) {\n"
+                    + "        reportError(String(error));\n"
+                    + "        return;\n"
+                    + "      }\n"
+                    + "      if (!ok) {\n"
+                    + "        try { reportError(window.OpenMAICFiles.lastError()); } catch (ignored) {}\n"
+                    + "      }\n"
+                    + "    });\n"
+                    + "    return true;\n"
+                    + "  }\n"
+                    + "\n"
+                    + "  // file-saver resolves the Blob through a temporary object URL. Cache\n"
+                    + "  // it here so the click handler can recover the bytes from the href.\n"
+                    + "  var nativeCreate = URL.createObjectURL;\n"
+                    + "  if (nativeCreate) {\n"
+                    + "    URL.createObjectURL = function (blob) {\n"
+                    + "      var url = nativeCreate.call(URL, blob);\n"
+                    + "      try { window.__openmaicBlobs = window.__openmaicBlobs || {}; window.__openmaicBlobs[url] = blob; } catch (ignored) {}\n"
+                    + "      return url;\n"
+                    + "    };\n"
+                    + "  }\n"
+                    + "\n"
+                    + "  document.addEventListener('click', function (event) {\n"
+                    + "    var node = event.target;\n"
+                    + "    while (node && node !== document && !(node.tagName && node.tagName.toLowerCase() === 'a')) {\n"
+                    + "      node = node.parentNode;\n"
+                    + "    }\n"
+                    + "    if (!node || node === document || !node.getAttribute) return;\n"
+                    + "    if (!node.hasAttribute('download')) return;\n"
+                    + "    var href = node.getAttribute('href') || '';\n"
+                    + "    var name = node.getAttribute('download') || 'download';\n"
+                    + "    var blob = null;\n"
+                    + "    if (window.__openmaicBlobs && window.__openmaicBlobs[href]) {\n"
+                    + "      blob = window.__openmaicBlobs[href];\n"
+                    + "    }\n"
+                    + "    if (!blob) return; // Not one of ours: let WebView do what it does.\n"
+                    + "    event.preventDefault();\n"
+                    + "    event.stopPropagation();\n"
+                    + "    handOff(blob, name, blob.type);\n"
+                    + "  }, true);\n"
+                    + "})();";
 
     private boolean portAcceptsConnections() {
         try (java.net.Socket socket = new java.net.Socket()) {
@@ -1114,6 +1221,29 @@ public class MainActivity extends Activity {
         return text.trim();
     }
 
+    /**
+     * Ask where to put a file the page produced.
+     *
+     * `ACTION_CREATE_DOCUMENT` rather than a fixed directory: the user picks the
+     * location (Downloads, Drive, an SD card) and Android grants this app write
+     * access to exactly that file, so nothing needs a storage permission.
+     *
+     * Called on the UI thread from the bridge.
+     */
+    void startSavePicker() {
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType(FileBridge.mimeType())
+                .putExtra(Intent.EXTRA_TITLE, FileBridge.suggestedName());
+        try {
+            startActivityForResult(intent, REQUEST_SAVE_FILE);
+        } catch (Exception error) {
+            Log.w(TAG, "no document provider to save into", error);
+            toast("没有可用的文件保存位置");
+            FileBridge.clearPending();
+        }
+    }
+
     private void startBackup() {
         Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT)
                 .addCategory(Intent.CATEGORY_OPENABLE)
@@ -1198,6 +1328,20 @@ public class MainActivity extends Activity {
                     return summary + "\n请重启 OpenMAIC 使恢复的数据生效。";
                 });
             }
+            return;
+        }
+        if (requestCode == REQUEST_SAVE_FILE) {
+            Uri target = (resultCode == RESULT_OK && data != null) ? data.getData() : null;
+            if (target == null) {
+                // The user backed out of the picker. Nothing to write, and no
+                // error worth a toast: cancelling is not a failure.
+                FileBridge.clearPending();
+                return;
+            }
+            runDataTask("正在保存…", () -> {
+                FileBridge.put(this, target);
+                return "文件已保存";
+            });
             return;
         }
         super.onActivityResult(requestCode, resultCode, data);
