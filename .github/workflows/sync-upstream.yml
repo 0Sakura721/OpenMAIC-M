@@ -128,14 +128,23 @@ jobs:
         if: steps.merge.outputs.conflicted == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Explicit, not inferred: `gh` resolves the repository from the git
+          # remote, and this checkout has two — the fork and upstream.
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          # `gh issue create --label` fails when the label does not exist yet,
-          # and on a fresh clone it does not. Created idempotently; a failure
-          # here is not fatal, because the issue matters more than its label.
+          # `gh issue create --label` fails when the label does not exist, and on
+          # a fresh repository it does not. Created first, and a failure here is
+          # tolerated: the issue matters more than its label.
+          #
+          # `--force` makes it a no-op from the second conflict onwards. The
+          # earlier version hid this command's stderr, so when creation failed the
+          # only visible symptom was the *next* command complaining that the label
+          # was missing — which read like an issue bug rather than a label one.
           gh label create upstream-sync \
             --description 'The scheduled upstream merge needs a person' \
-            --color FBCA04 2>/dev/null || true
+            --color FBCA04 \
+            --force || echo "::warning::could not create the upstream-sync label"
           # One open issue, reused: a daily schedule would otherwise leave a new
           # one per day for the same unresolved conflict.
           EXISTING="$(gh issue list --label upstream-sync --state open --limit 1 --json number --jq '.[0].number // empty')"
@@ -197,6 +206,9 @@ jobs:
         if: steps.push.outputs.merged_sha != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Same reason as the conflict report: two remotes, so the target has to
+          # be named rather than inferred.
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           gh workflow run apk.yml --ref main
