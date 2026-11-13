@@ -14,12 +14,12 @@ import {
   type IframePoolEntry,
 } from '@/lib/store/interactive-iframe-pool';
 import { useSceneRuntimeErrors } from '@/lib/store/scene-runtime-errors';
+import { GENUI_LOGICAL_HEIGHT, GENUI_LOGICAL_WIDTH } from '@/lib/interactive/logical-viewport';
 import {
-  GENUI_LOGICAL_HEIGHT,
-  GENUI_LOGICAL_WIDTH,
-  fitGenUiViewport,
-} from '@/lib/interactive/logical-viewport';
-import { intersectClientBoxes } from '@/lib/edit/visible-client-rect';
+  GENUI_FIT_REPORT_REQUEST,
+  GENUI_FIT_SCROLL_REQUEST,
+  useGenUiFit,
+} from '@/lib/interactive/use-genui-fit';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useElementRefsStore } from '@/lib/store/element-refs';
 import { useI18n } from '@/lib/hooks/use-i18n';
@@ -30,6 +30,7 @@ import {
   makeInteractiveElementRef,
 } from '@/lib/workbench/element-refs';
 import { InteractiveRuntimeErrorBanner } from './InteractiveRuntimeErrorBanner';
+import { InteractiveMoreBelowCue } from './InteractiveMoreBelowCue';
 
 type InteractivePickerMessage = {
   __maicInteractive?: boolean;
@@ -355,6 +356,14 @@ function PooledIframe({
     [refs, sceneId],
   );
   const documentToken = entry.srcDoc ? `srcDoc:${entry.srcDoc}` : `src:${entry.src ?? ''}`;
+  const rect = entry.rect;
+  const fit = useGenUiFit(rect, documentToken);
+  const handleFitMessage = fit.handleMessage;
+  // A new fit key restarts the fit; the page only re-posts when its own size
+  // changes, so ask for its current extent.
+  useEffect(() => {
+    iframeRef.current?.contentWindow?.postMessage(GENUI_FIT_REPORT_REQUEST, '*');
+  }, [fit.fitKey]);
 
   // Register the postMessage callback for this scene (moved here from the
   // placeholder, since the iframe now lives in the host). Stable per scene:
@@ -402,6 +411,7 @@ function PooledIframe({
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       if (e.source !== iframeRef.current?.contentWindow) return;
+      if (handleFitMessage(e.data)) return;
       const d = e.data as
         | (InteractivePickerMessage & { errorKind?: string; message?: unknown })
         | undefined;
@@ -429,8 +439,18 @@ function PooledIframe({
     };
     window.addEventListener('message', onMessage);
     iframeRef.current?.contentWindow?.postMessage({ __maicErrorReplayRequest: true }, '*');
+    iframeRef.current?.contentWindow?.postMessage(GENUI_FIT_REPORT_REQUEST, '*');
     return () => window.removeEventListener('message', onMessage);
-  }, [sceneId, entry.srcDoc, effectiveMode, onPlaybackCancel, onPlaybackPick, playbackArmed, t]);
+  }, [
+    sceneId,
+    entry.srcDoc,
+    effectiveMode,
+    handleFitMessage,
+    onPlaybackCancel,
+    onPlaybackPick,
+    playbackArmed,
+    t,
+  ]);
 
   // A content change reloads the iframe; drop the previous render's errors so the
   // captured set reflects the CURRENT page (e.g. after the agent applies a fix).
@@ -439,9 +459,13 @@ function PooledIframe({
     useSceneRuntimeErrors.getState().clearScene(sceneId);
   }, [sceneId, entry.srcDoc]);
 
-  const rect = entry.rect;
   const clip = entry.clip ?? rect;
-  const viewport = rect ? fitGenUiViewport(rect) : null;
+  // Fitted to the slot and to the content extent the page reports: a page larger
+  // than its viewport is shrunk, down to a floor, so it fits unscrolled. This
+  // replaced an earlier fixed minimum scale of our own — shrinking the logical
+  // viewport and letting the page reflow keeps text legible where scaling a
+  // 1280-wide canvas down to a phone did not.
+  const viewport = fit.viewport;
 
   // On a phone the layout viewport is not the area a learner can see: the
   // on-screen keyboard shrinks the *visual* viewport without resizing this
@@ -471,15 +495,12 @@ function PooledIframe({
     };
   }, []);
 
-  // The wrap is the *slot*, not the scaled content. Below the minimum scale the
-  // content is deliberately larger than the slot so its text stays legible,
-  // and clipping to the content's own box would then cut the scene in half —
-  // the thing the larger scale was meant to avoid. The slot clips instead, and
-  // the frame is positioned inside it so the scene can be panned.
+  // Clipped to the slot, then trimmed to what the keyboard leaves visible. Not
+  // to the content's own box: a scene larger than its slot is reachable by
+  // scrolling, and clipping to the content would cut away the part the scroll
+  // is for.
   const visibleViewport =
-    viewport && clip
-      ? trimToVisualViewport(clip, visualInset)
-      : null;
+    viewport && clip ? trimToVisualViewport(clip, visualInset) : null;
   // Require a real measured box before showing — a null or zero-size rect means
   // the slot hasn't laid out yet; showing then would flash a 0x0 iframe pinned
   // at the viewport origin.
@@ -523,15 +544,24 @@ function PooledIframe({
   // scene is larger than the slot.
   const scrollExtent: CSSProperties = {
     position: 'relative',
-    width: viewport ? GENUI_LOGICAL_WIDTH * viewport.scale : '100%',
-    height: viewport ? GENUI_LOGICAL_HEIGHT * viewport.scale : '100%',
+    // The fitted logical size times the scale — not GENUI_LOGICAL_WIDTH, which
+    // is only the floor: a narrow slot gets a smaller logical viewport, and the
+    // spacer has to match or the scroll range would be wrong.
+    width: viewport ? viewport.width * viewport.scale : '100%',
+    height: viewport ? viewport.height * viewport.scale : '100%',
   };
   const iframeStyle: CSSProperties = {
     position: 'absolute',
+    // Anchored at the scroll layer's origin, not offset by the box: the spacer
+    // below already carries the scaled extent, so an offset here would double
+    // it and put the top-left corner out of reach of the scroll.
     left: 0,
     top: 0,
-    width: GENUI_LOGICAL_WIDTH,
-    height: GENUI_LOGICAL_HEIGHT,
+    // The logical size the page was fitted to — it can be smaller than 1280×720
+    // when the slot is narrow, which is what keeps text legible instead of
+    // scaling a wide canvas down.
+    width: viewport?.width ?? GENUI_LOGICAL_WIDTH,
+    height: viewport?.height ?? GENUI_LOGICAL_HEIGHT,
     border: 0,
     transform: `scale(${viewport?.scale ?? 0})`,
     transformOrigin: 'top left',
@@ -561,6 +591,13 @@ function PooledIframe({
         <InteractiveRuntimeErrorBanner
           message={latestRuntimeError}
           onDismiss={() => setDismissedRuntimeSignature(runtimeErrorSignature)}
+        />
+      ) : null}
+      {shown && fit.showMoreCue && !showRuntimeError && !playbackArmed ? (
+        <InteractiveMoreBelowCue
+          onClick={() =>
+            iframeRef.current?.contentWindow?.postMessage(GENUI_FIT_SCROLL_REQUEST, '*')
+          }
         />
       ) : null}
       {playbackArmed && (
